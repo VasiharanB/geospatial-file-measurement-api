@@ -9,8 +9,9 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 // Base API URL for authoritative FastAPI service (configurable for production deployment)
+const PROD_API_URL = "https://geospatial-measurement-api-9tqz.onrender.com";
 const API_BASE_URL = (typeof window !== 'undefined' && (window.ENV_API_BASE_URL || new URLSearchParams(window.location.search).get('api_url'))) 
-  || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? "http://127.0.0.1:8000" : window.location.origin);
+  || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? "http://127.0.0.1:8000" : PROD_API_URL);
 
 // Allowed extensions and bounded stream limit (25 MB)
 const ALLOWED_EXTENSIONS = [".kml", ".zip"];

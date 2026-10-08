@@ -8,10 +8,12 @@
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/VasiharanB/geospatial-file-measurement-api)
 
 ### Live Project Deliverables
+* **Live 3D Web Application (Frontend)**: [https://vasiharanb.github.io/geospatial-file-measurement-api/](https://vasiharanb.github.io/geospatial-file-measurement-api/)
+* **Live Production Backend API**: [https://geospatial-measurement-api-9tqz.onrender.com](https://geospatial-measurement-api-9tqz.onrender.com)
+* **Live Interactive Swagger Docs**: [https://geospatial-measurement-api-9tqz.onrender.com/docs](https://geospatial-measurement-api-9tqz.onrender.com/docs)
+* **Live OpenAPI 3.1 Specification**: [https://geospatial-measurement-api-9tqz.onrender.com/openapi.json](https://geospatial-measurement-api-9tqz.onrender.com/openapi.json)
 * **Public GitHub Repository**: [https://github.com/VasiharanB/geospatial-file-measurement-api](https://github.com/VasiharanB/geospatial-file-measurement-api)
-* **Live 3D Web Application (GitHub Pages)**: [https://vasiharanb.github.io/geospatial-file-measurement-api/](https://vasiharanb.github.io/geospatial-file-measurement-api/)
 * **Automated CI Regression Runs**: [https://github.com/VasiharanB/geospatial-file-measurement-api/actions](https://github.com/VasiharanB/geospatial-file-measurement-api/actions)
-* **1-Click Render Backend Deployment**: [Deploy to Render via Blueprint](https://render.com/deploy?repo=https://github.com/VasiharanB/geospatial-file-measurement-api)
 
 ---
 
