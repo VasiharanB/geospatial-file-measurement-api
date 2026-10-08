@@ -1,0 +1,50 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# SQLite databases & WAL logs
+*.db
+*.db-wal
+*.db-shm
+geospatial.db
+geospatial.db-wal
+geospatial.db-shm
+
+# Persistent uploaded geospatial files
+storage/
+storage/uploads/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment settings & secrets
+.env
+.env.local
+
+# Testing, local outputs & temporary test archives
+.pytest_cache/
+.coverage
+htmlcov/
+scratch/
+test_data_part9a/
+ui_verification_results.json
+verify_all_ui_cases.js
+generate_test_files.py
+scratch_test.js
+*.log
+*.webp
+
+# IDE & Editor folders
+.vscode/
+.idea/
+.gemini/
+*.swp
+*.swo
+
+# Operating System specific
+.DS_Store
+Thumbs.db

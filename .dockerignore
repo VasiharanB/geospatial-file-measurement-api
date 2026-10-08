@@ -1,0 +1,30 @@
+# Git and VCS
+.git/
+.gitignore
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# Local databases and runtime storage
+geospatial.db
+geospatial.db-wal
+geospatial.db-shm
+storage/
+*.db
+
+# Temporary directories and test caches
+scratch/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE and environment files
+.vscode/
+.idea/
+.env
+.gemini/

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <Placemark>
+      <name>Survey Polygon</name>
+      <Polygon>
+        <outerBoundaryIs>
+          <LinearRing>
+            <coordinates>
+              2.3522,48.8566,0
+              2.3622,48.8566,0
+              2.3622,48.8666,0
+              2.3522,48.8666,0
+              2.3522,48.8566,0
+            </coordinates>
+          </LinearRing>
+        </outerBoundaryIs>
+      </Polygon>
+    </Placemark>
+    <Placemark>
+      <name>Survey Line</name>
+      <LineString>
+        <coordinates>
+          2.3522,48.8566,0
+          2.3622,48.8666,0
+        </coordinates>
+      </LineString>
+    </Placemark>
+  </Document>
+</kml>
