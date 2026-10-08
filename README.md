@@ -3,6 +3,16 @@
 > **Authoritative, CRS-Aware Geospatial Processing Engine with Interactive 3D Earth Analytics**  
 > Ingests KML 2.2 and ESRI Shapefile archives, resolves local and global conformal metric projections, computes millimeter-precision planar area and length, persists spatial entities, and exposes results via high-performance REST APIs.
 
+[![CI / Automated Regression Test Suite](https://github.com/VasiharanB/geospatial-file-measurement-api/actions/workflows/ci.yml/badge.svg)](https://github.com/VasiharanB/geospatial-file-measurement-api/actions/workflows/ci.yml)
+[![GitHub Pages Deployment](https://img.shields.io/badge/GitHub%20Pages-Live%20Frontend-brightgreen)](https://vasiharanb.github.io/geospatial-file-measurement-api/)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/VasiharanB/geospatial-file-measurement-api)
+
+### Live Project Deliverables
+* **Public GitHub Repository**: [https://github.com/VasiharanB/geospatial-file-measurement-api](https://github.com/VasiharanB/geospatial-file-measurement-api)
+* **Live 3D Web Application (GitHub Pages)**: [https://vasiharanb.github.io/geospatial-file-measurement-api/](https://vasiharanb.github.io/geospatial-file-measurement-api/)
+* **Automated CI Regression Runs**: [https://github.com/VasiharanB/geospatial-file-measurement-api/actions](https://github.com/VasiharanB/geospatial-file-measurement-api/actions)
+* **1-Click Render Backend Deployment**: [Deploy to Render via Blueprint](https://render.com/deploy?repo=https://github.com/VasiharanB/geospatial-file-measurement-api)
+
 ---
 
 ## Table of Contents
