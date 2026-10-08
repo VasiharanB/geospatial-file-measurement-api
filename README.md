@@ -826,7 +826,7 @@ git add .
 git commit -m "feat: complete production-ready geospatial file measurement API and 3D UI"
 
 # 4. Link to your remote GitHub repository
-git remote add origin https://github.com/<your-username>/<your-repo-name>.git
+git remote add origin https://github.com/VasiharanB/geospatial-file-measurement-api.git
 git branch -M main
 
 # 5. Push to GitHub
@@ -845,11 +845,16 @@ Geospatial File Measurement API/
 ├── script.js                   # Client controller: procedural 3D Earth, dual theme switcher, spatial canvas
 ├── requirements.txt            # Locked production dependencies
 ├── Dockerfile                  # Production container definition
+├── render.yaml                 # Render Infrastructure-as-Code blueprint for automated container deployment
 ├── .env.example                # Runtime environment configuration template
 ├── .gitignore                  # Git exclusion rules for databases, storage, and caches
 ├── .dockerignore               # Container build exclusion rules
 ├── README.md                   # Authoritative project documentation
 ├── GEOSPATIAL_API_DESIGN.md    # Initial architectural blueprint
+│
+├── .github/
+│   └── workflows/
+│       └── ci.yml              # GitHub Actions CI automated regression test pipeline
 │
 ├── docs/
 │   └── images/                 # Verified interface screenshots
