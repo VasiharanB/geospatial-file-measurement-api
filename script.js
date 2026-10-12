@@ -12,18 +12,14 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 const PROD_API_URL = "https://geospatial-measurement-api-9tqz.onrender.com";
 const LOCAL_API_URL = "http://127.0.0.1:8000";
 
-// Allowed API Origins for Secure Verification (Prevents Malicious API Hijacking / Exfiltration)
-const TRUSTED_API_ORIGINS = new Set([
-  new URL(PROD_API_URL).origin,
-  "http://127.0.0.1:8000",
-  "http://localhost:8000",
-]);
-
 /**
  * Resolve the authoritative API Base URL securely:
- * 1. Validates that any URL override (?api_url= or window.ENV_API_BASE_URL) belongs to an explicitly trusted origin.
- * 2. Blocks untrusted third-party endpoints to prevent exfiltration of uploaded geospatial files.
- * 3. Gracefully defaults to localhost for local testing and production Render for deployed instances.
+ * 1. An untrusted external ?api_url= or window.ENV_API_BASE_URL value must never receive uploaded files.
+ * 2. On the deployed GitHub Pages frontend (or any non-local hostname), localhost API overrides
+ *    must NOT be accepted (mixed content and loopback exploitation protection).
+ * 3. Localhost overrides are permitted ONLY when the application is running in its intended local-development context.
+ * 4. window.ENV_API_BASE_URL is validated using the exact same origin trust policy.
+ * 5. Rejected overrides fall back safely to the authoritative backend default with a clear console security alert.
  */
 function getAuthoritativeApiBaseUrl() {
   if (typeof window === "undefined") {
@@ -32,33 +28,47 @@ function getAuthoritativeApiBaseUrl() {
 
   const isLocalDev = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
   const defaultUrl = isLocalDev ? LOCAL_API_URL : PROD_API_URL;
+  const prodOrigin = new URL(PROD_API_URL).origin;
 
-  // 1. Inspect window.ENV_API_BASE_URL (configured by developer test harnesses)
-  const envOverride = window.ENV_API_BASE_URL;
-  if (envOverride && typeof envOverride === "string") {
+  // Origin Trust Policy:
+  // - In local development: localhost and production backend are acceptable targets.
+  // - In production/deployed environment: ONLY the authoritative production backend is trusted; localhost is strictly forbidden.
+  const trustedOrigins = isLocalDev
+    ? new Set([prodOrigin, "http://127.0.0.1:8000", "http://localhost:8000"])
+    : new Set([prodOrigin]);
+
+  function validateCandidateUrl(candidate, sourceName) {
+    if (!candidate || typeof candidate !== "string") {
+      return null;
+    }
     try {
-      const parsed = new URL(envOverride, window.location.href);
-      if (TRUSTED_API_ORIGINS.has(parsed.origin) || isLocalDev) {
+      const parsed = new URL(candidate, window.location.href);
+      if (trustedOrigins.has(parsed.origin)) {
         return parsed.origin;
       }
-      console.warn(`[Security] Untrusted window.ENV_API_BASE_URL origin rejected: ${parsed.origin}`);
+      if (!isLocalDev && (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]")) {
+        console.warn(`[Security] Localhost API override from ${sourceName} rejected in production deployment. Falling back to authoritative backend.`);
+      } else {
+        console.warn(`[Security] Untrusted ${sourceName} origin rejected: ${parsed.origin}. Falling back to authoritative backend.`);
+      }
+      return null;
     } catch (e) {
-      console.warn(`[Security] Malformed window.ENV_API_BASE_URL ignored: ${envOverride}`);
+      console.warn(`[Security] Malformed ${sourceName} URL ignored: ${candidate}`);
+      return null;
     }
   }
 
-  // 2. Inspect query parameter override (?api_url=)
+  // 1. Inspect window.ENV_API_BASE_URL using strict origin trust policy
+  const envValid = validateCandidateUrl(window.ENV_API_BASE_URL, "window.ENV_API_BASE_URL");
+  if (envValid) {
+    return envValid;
+  }
+
+  // 2. Inspect query parameter override (?api_url=) using strict origin trust policy
   const urlParam = new URLSearchParams(window.location.search).get("api_url");
-  if (urlParam && typeof urlParam === "string") {
-    try {
-      const parsed = new URL(urlParam, window.location.href);
-      if (TRUSTED_API_ORIGINS.has(parsed.origin)) {
-        return parsed.origin;
-      }
-      console.warn(`[Security] Untrusted ?api_url= destination rejected: ${urlParam}. Falling back to default.`);
-    } catch (e) {
-      console.warn(`[Security] Malformed ?api_url= query parameter ignored: ${urlParam}`);
-    }
+  const paramValid = validateCandidateUrl(urlParam, "?api_url=");
+  if (paramValid) {
+    return paramValid;
   }
 
   return defaultUrl;

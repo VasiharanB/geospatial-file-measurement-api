@@ -1,8 +1,8 @@
 {
   "audit_metadata": {
-    "title": "Geospatial File Measurement API - Security Assessment Results",
-    "timestamp": "2026-10-13T00:27:00Z",
-    "commit": "2713b50",
+    "title": "Geospatial File Measurement API - Phase 11.1 Security Closure Results",
+    "timestamp": "2026-10-13T00:38:00Z",
+    "commit": "c32ad32",
     "branch": "main",
     "environment": "Windows 11 / Python 3.14.3 / FastAPI 0.142.2",
     "authoritative_scope": {
@@ -15,8 +15,8 @@
   "summary": {
     "total_test_suites": 9,
     "passed_test_suites": 9,
-    "total_scenarios": 144,
-    "passed_scenarios": 144,
+    "total_scenarios": 147,
+    "passed_scenarios": 147,
     "pass_rate_percentage": 100.0,
     "pip_audit_vulnerabilities": 0,
     "bandit_security_issues": 0,
@@ -50,25 +50,28 @@
       "cwe": "CWE-601 / CWE-200",
       "affected_component": "script.js (getAuthoritativeApiBaseUrl)",
       "status": "REMEDIATED",
+      "closure_hardening": "Localhost overrides strictly forbidden when deployed to production/GitHub Pages; permitted only in local dev context. window.ENV_API_BASE_URL validated with identical trust policy.",
       "regression_test": "tests/test_security_audit.py::Scenario_7"
     },
     {
       "id": "SEC-02",
-      "title": "Missing Defense-in-Depth HTTP Security Response Headers",
+      "title": "Missing Defense-in-Depth HTTP Security Response Headers & API CSP",
       "severity": "MEDIUM",
       "cwe": "CWE-693",
       "affected_component": "main.py (security_headers_middleware)",
       "status": "REMEDIATED",
-      "regression_test": "tests/test_security_audit.py::Scenario_1"
+      "closure_hardening": "Injected X-Content-Type-Options, X-Frame-Options: DENY, X-XSS-Protection, Referrer-Policy, Permissions-Policy, and API-specific Content-Security-Policy (default-src 'none'; frame-ancestors 'none').",
+      "regression_test": "tests/test_security_audit.py::Scenario_1, Scenario_11"
     },
     {
       "id": "SEC-03",
       "title": "Missing API Request Rate Limiting / Flooding Protection",
       "severity": "MEDIUM",
       "cwe": "CWE-770",
-      "affected_component": "main.py (rate_limiting_middleware)",
+      "affected_component": "main.py (rate_limiting_middleware, get_client_ip)",
       "status": "REMEDIATED",
-      "regression_test": "tests/test_security_audit.py::Scenario_6"
+      "closure_hardening": "Differentiated upload limits (60/min) from read limits (300/min). Prioritizes authentic Cloudflare CF-Connecting-IP; avoids blind trust of spoofable X-Forwarded-For headers. Returns HTTP 429 and Retry-After: 60.",
+      "regression_test": "tests/test_security_audit.py::Scenario_6, Scenario_9, Scenario_10"
     },
     {
       "id": "SEC-04",
@@ -108,7 +111,7 @@
     },
     {
       "id": "SEC-08",
-      "title": "Blind Try-Except-Pass in Property Serialization",
+      "title": "Broad Try-Except-Pass in Property Serialization",
       "severity": "LOW",
       "cwe": "CWE-703 (Bandit B110)",
       "affected_component": "main.py (process_geospatial_file_sync)",

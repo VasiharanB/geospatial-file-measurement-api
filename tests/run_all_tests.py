@@ -1,6 +1,6 @@
 """
 Master Test Runner for Geospatial File Measurement API
-Executes all 9 verified test suites (Parts 2 to 10) covering 142 total scenarios:
+Executes all 9 verified test suites (Parts 2 to 10) covering 147 total scenarios:
 - verify_part2.py        (Part 2: 23 tests)
 - test_part3.py          (Part 3: 16 tests)
 - test_part4.py          (Part 4: 20 tests)
@@ -9,7 +9,7 @@ Executes all 9 verified test suites (Parts 2 to 10) covering 142 total scenarios
 - test_part7.py          (Part 7: 15 tests)
 - test_part8.py          (Part 8: 16 tests)
 - test_part9a.py         (Part 9A: 20 tests)
-- test_security_audit.py (Part 10: 6 tests)
+- test_security_audit.py (Part 10: 11 tests)
 """
 
 import pathlib
@@ -28,7 +28,7 @@ SUITES = [
     ("Part 7 — Database Layer & Architecture Hardening", "test_part7.py", 15),
     ("Part 8 — Production Quality & Deployment Readiness", "test_part8.py", 16),
     ("Part 9A — Functional UI Validation & End-to-End Integration", "test_part9a.py", 20),
-    ("Part 10 — Defensive Security Audit & Hardening", "test_security_audit.py", 8),
+    ("Part 10 — Defensive Security Audit & Hardening", "test_security_audit.py", 11),
 ]
 
 def main():

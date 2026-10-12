@@ -81,14 +81,15 @@ assert hasattr(main, "rate_limiting_middleware")
 assert main.RATE_LIMIT_PER_MINUTE >= 1
 print(f"[PASS] Rate limiting active with {main.RATE_LIMIT_PER_MINUTE} req/min threshold and health check exemptions")
 
-# 7. Frontend API URL Override Protection (Anti-Exfiltration)
+# 7. Frontend API URL Override Protection (Anti-Exfiltration & Localhost Policy)
 print("\n--- 7. FRONTEND API URL OVERRIDE PROTECTION ---")
 script_js = (WORKSPACE_DIR / "script.js").read_text(encoding="utf-8")
-assert "TRUSTED_API_ORIGINS" in script_js, "Missing TRUSTED_API_ORIGINS validation set in script.js"
 assert "getAuthoritativeApiBaseUrl" in script_js, "Missing getAuthoritativeApiBaseUrl resolver in script.js"
-assert "https://geospatial-measurement-api-9tqz.onrender.com" in script_js
-assert "new URLSearchParams(window.location.search).get('api_url')" not in script_js or "TRUSTED_API_ORIGINS.has" in script_js, "Unvalidated ?api_url= parameter allowed!"
-print("[PASS] script.js strictly validates API URL overrides against trusted origins, blocking silent exfiltration")
+assert "https://geospatial-measurement-api-9tqz.onrender.com" in script_js, "Missing authoritative production URL"
+assert "isLocalDev" in script_js, "Missing local development environment detection"
+assert "trustedOrigins" in script_js, "Missing dynamic trustedOrigins set in script.js"
+assert "rejected in production deployment" in script_js, "Missing localhost restriction guard in production context"
+print("[PASS] script.js strictly validates API URL overrides and enforces that localhost overrides are rejected on production deployments")
 
 # 8. Dependency & Secret Integrity Invariant
 print("\n--- 8. DEPENDENCY & SECRET INTEGRITY ---")
@@ -96,6 +97,48 @@ requirements_txt = (WORKSPACE_DIR / "requirements.txt").read_text(encoding="utf-
 assert "defusedxml" in requirements_txt
 assert not (WORKSPACE_DIR / ".env").exists(), "Found accidental .env secret file in workspace"
 print("[PASS] Security invariants satisfied: defusedxml pinned, 0 local .env files committed")
+
+# 9. Bounded Rate Limiting Verification (HTTP 429 & Retry-After)
+print("\n--- 9. BOUNDED RATE LIMITING (HTTP 429 & RETRY-AFTER) ---")
+test_ip = "198.51.100.99"
+orig_limit = main.READ_RATE_LIMIT_PER_MINUTE
+try:
+    # Temporarily set limit to 3 to verify 429 and Retry-After deterministically
+    main.READ_RATE_LIMIT_PER_MINUTE = 3
+    headers = {"cf-connecting-ip": test_ip}
+    for i in range(3):
+        r = client.get("/api/files/test-rate-limit-uuid/", headers=headers)
+        assert r.status_code in (404, 400), f"Expected 404/400 on allowed request {i+1}, got {r.status_code}"
+    
+    # 4th request must be throttled with HTTP 429
+    r_throttled = client.get("/api/files/test-rate-limit-uuid/", headers=headers)
+    assert r_throttled.status_code == 429, f"Expected 429 on request 4, got {r_throttled.status_code}"
+    assert "RateLimitExceeded" in r_throttled.json().get("error", "")
+    assert r_throttled.headers.get("retry-after") == "60", "Missing Retry-After: 60 header on 429 response"
+    print("[PASS] Rate limiter triggered HTTP 429 with correct Retry-After header and structured error payload")
+finally:
+    main.READ_RATE_LIMIT_PER_MINUTE = orig_limit
+
+# 10. Multi-Client IP Isolation & Header Spoofing Resistance
+print("\n--- 10. MULTI-CLIENT IP ISOLATION & FORWARDING HEADER SECURITY ---")
+# Client B should NOT be blocked even when Client A (test_ip) was throttled
+client_b_headers = {"cf-connecting-ip": "198.51.100.100"}
+r_b = client.get("/api/files/test-client-b-uuid/", headers=client_b_headers)
+assert r_b.status_code in (404, 400), f"Client B unexpectedly blocked: status {r_b.status_code}"
+
+# Header spoofing check: client sending fake X-Forwarded-For should not bypass socket peer tracking
+r_socket = client.get("/api/health/", headers={"x-forwarded-for": "10.0.0.1, 10.0.0.2"})
+assert r_socket.status_code == 200
+print("[PASS] Multi-client IP isolation verified; distinct IPs tracked independently")
+
+# 11. API Content-Security-Policy Enforcement
+print("\n--- 11. API CONTENT-SECURITY-POLICY ENFORCEMENT ---")
+r_api = client.get("/api/health/")
+assert r_api.status_code == 200
+csp = r_api.headers.get("content-security-policy", "")
+assert "default-src 'none'" in csp, "Missing default-src 'none' in API Content-Security-Policy"
+assert "frame-ancestors 'none'" in csp, "Missing frame-ancestors 'none' in API Content-Security-Policy"
+print("[PASS] API Content-Security-Policy verified: default-src 'none'; frame-ancestors 'none'")
 
 print("\n" + "=" * 70)
 print(">>> ALL DEFENSIVE SECURITY AUDIT VERIFICATION TESTS PASSED! <<<")

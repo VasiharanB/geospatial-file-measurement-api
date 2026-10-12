@@ -1235,40 +1235,66 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
+    if request.url.path.startswith("/api/"):
+        response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
     return response
 
 
-RATE_LIMIT_PER_MINUTE = _parse_env_int("RATE_LIMIT_PER_MINUTE", 600)
+UPLOAD_RATE_LIMIT_PER_MINUTE = _parse_env_int("UPLOAD_RATE_LIMIT_PER_MINUTE", 60)
+READ_RATE_LIMIT_PER_MINUTE = _parse_env_int("READ_RATE_LIMIT_PER_MINUTE", 300)
+RATE_LIMIT_PER_MINUTE = READ_RATE_LIMIT_PER_MINUTE
+
 _rate_limit_lock = asyncio.Lock()
-_ip_request_timestamps: Dict[str, List[float]] = {}
+_ip_upload_timestamps: Dict[str, List[float]] = {}
+_ip_read_timestamps: Dict[str, List[float]] = {}
+
+
+def get_client_ip(request: Request) -> str:
+    """
+    Safely extract client IP address:
+    1. Prioritizes Cloudflare 'CF-Connecting-IP' header when present (guaranteed authentic by Cloudflare proxy edge).
+    2. Falls back to direct TCP socket peer host (request.client.host).
+    3. Avoids blindly trusting arbitrary client-supplied 'X-Forwarded-For' headers to prevent rate-limit bypass.
+    """
+    cf_ip = request.headers.get("cf-connecting-ip")
+    if cf_ip and re.match(r"^[0-9a-fA-F:.]+$", cf_ip.strip()):
+        return cf_ip.strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "127.0.0.1"
 
 
 @app.middleware("http")
 async def rate_limiting_middleware(request: Request, call_next):
-    """In-memory sliding-window IP rate limiter for DoS defense."""
-    # Exempt OPTIONS preflight requests, health checks, and API docs
+    """In-memory sliding-window IP rate limiter for DoS defense with separate upload and read limits."""
+    # Exempt OPTIONS preflight requests, health checks, and API documentation
     if request.method == "OPTIONS" or request.url.path in ("/api/health/", "/docs", "/redoc", "/openapi.json"):
         return await call_next(request)
 
-    client_ip = request.client.host if request.client else "127.0.0.1"
+    client_ip = get_client_ip(request)
     now = datetime.utcnow().timestamp()
 
+    is_upload = request.method == "POST" and request.url.path.rstrip("/").endswith("/api/files")
+    limit = UPLOAD_RATE_LIMIT_PER_MINUTE if is_upload else READ_RATE_LIMIT_PER_MINUTE
+
     async with _rate_limit_lock:
-        timestamps = _ip_request_timestamps.get(client_ip, [])
+        store = _ip_upload_timestamps if is_upload else _ip_read_timestamps
+        timestamps = store.get(client_ip, [])
         cutoff = now - 60.0
         timestamps = [ts for ts in timestamps if ts > cutoff]
 
-        if len(timestamps) >= RATE_LIMIT_PER_MINUTE:
+        if len(timestamps) >= limit:
+            action_label = "upload" if is_upload else "request"
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 content={
                     "error": "RateLimitExceeded",
-                    "detail": f"Rate limit of {RATE_LIMIT_PER_MINUTE} requests/minute exceeded. Please retry later.",
+                    "detail": f"Rate limit of {limit} {action_label}s/minute exceeded for this client. Please retry later.",
                 },
                 headers={"Retry-After": "60"},
             )
         timestamps.append(now)
-        _ip_request_timestamps[client_ip] = timestamps
+        store[client_ip] = timestamps
 
     return await call_next(request)
 
