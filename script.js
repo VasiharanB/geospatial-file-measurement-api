@@ -8,10 +8,63 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-// Base API URL for authoritative FastAPI service (configurable for production deployment)
+// Authoritative API Target Endpoints
 const PROD_API_URL = "https://geospatial-measurement-api-9tqz.onrender.com";
-const API_BASE_URL = (typeof window !== 'undefined' && (window.ENV_API_BASE_URL || new URLSearchParams(window.location.search).get('api_url'))) 
-  || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? "http://127.0.0.1:8000" : PROD_API_URL);
+const LOCAL_API_URL = "http://127.0.0.1:8000";
+
+// Allowed API Origins for Secure Verification (Prevents Malicious API Hijacking / Exfiltration)
+const TRUSTED_API_ORIGINS = new Set([
+  new URL(PROD_API_URL).origin,
+  "http://127.0.0.1:8000",
+  "http://localhost:8000",
+]);
+
+/**
+ * Resolve the authoritative API Base URL securely:
+ * 1. Validates that any URL override (?api_url= or window.ENV_API_BASE_URL) belongs to an explicitly trusted origin.
+ * 2. Blocks untrusted third-party endpoints to prevent exfiltration of uploaded geospatial files.
+ * 3. Gracefully defaults to localhost for local testing and production Render for deployed instances.
+ */
+function getAuthoritativeApiBaseUrl() {
+  if (typeof window === "undefined") {
+    return LOCAL_API_URL;
+  }
+
+  const isLocalDev = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+  const defaultUrl = isLocalDev ? LOCAL_API_URL : PROD_API_URL;
+
+  // 1. Inspect window.ENV_API_BASE_URL (configured by developer test harnesses)
+  const envOverride = window.ENV_API_BASE_URL;
+  if (envOverride && typeof envOverride === "string") {
+    try {
+      const parsed = new URL(envOverride, window.location.href);
+      if (TRUSTED_API_ORIGINS.has(parsed.origin) || isLocalDev) {
+        return parsed.origin;
+      }
+      console.warn(`[Security] Untrusted window.ENV_API_BASE_URL origin rejected: ${parsed.origin}`);
+    } catch (e) {
+      console.warn(`[Security] Malformed window.ENV_API_BASE_URL ignored: ${envOverride}`);
+    }
+  }
+
+  // 2. Inspect query parameter override (?api_url=)
+  const urlParam = new URLSearchParams(window.location.search).get("api_url");
+  if (urlParam && typeof urlParam === "string") {
+    try {
+      const parsed = new URL(urlParam, window.location.href);
+      if (TRUSTED_API_ORIGINS.has(parsed.origin)) {
+        return parsed.origin;
+      }
+      console.warn(`[Security] Untrusted ?api_url= destination rejected: ${urlParam}. Falling back to default.`);
+    } catch (e) {
+      console.warn(`[Security] Malformed ?api_url= query parameter ignored: ${urlParam}`);
+    }
+  }
+
+  return defaultUrl;
+}
+
+const API_BASE_URL = getAuthoritativeApiBaseUrl();
 
 // Allowed extensions and bounded stream limit (25 MB)
 const ALLOWED_EXTENSIONS = [".kml", ".zip"];
@@ -83,6 +136,12 @@ const geometryCanvas = document.getElementById("geometry-canvas");
 const zoomInBtn = document.getElementById("zoom-in-btn");
 const zoomOutBtn = document.getElementById("zoom-out-btn");
 const zoomFitBtn = document.getElementById("zoom-fit-btn");
+const clearViewBtn = document.getElementById("clear-view-btn");
+const leafletMapEl = document.getElementById("leaflet-map");
+const mapHudCoords = document.getElementById("map-hud-coords");
+const mapHudZoom = document.getElementById("map-hud-zoom");
+const mapEmptyOverlay = document.getElementById("map-empty-overlay");
+const basemapPillsContainer = document.getElementById("basemap-pills");
 
 // 3D Globe HUD & Canvas
 const heroCanvas = document.getElementById("hero-canvas");
@@ -169,9 +228,13 @@ function applyTheme(theme, persist = true) {
   // Update Three.js lighting and background
   updateThreeJsTheme(theme);
 
-  // Redraw geometry canvas with theme-aware styling
+  // Redraw geometry viewport or update map basemap with theme-aware styling
   if (spatialViewer) {
-    spatialViewer.render();
+    if (typeof spatialViewer.updateTheme === "function") {
+      spatialViewer.updateTheme(theme);
+    } else if (typeof spatialViewer.render === "function") {
+      spatialViewer.render();
+    }
   }
 }
 
@@ -1031,6 +1094,14 @@ async function processUpload(file) {
     // Render results
     renderAnalysisResults(fileDetail, measResult.measurements);
 
+    // Invalidate map size so Leaflet recalculates viewport bounds immediately
+    if (spatialViewer && spatialViewer.map) {
+      setTimeout(() => {
+        spatialViewer.map.invalidateSize();
+        spatialViewer.fit();
+      }, 150);
+    }
+
     // Smooth scroll to results
     resultsContainer.scrollIntoView({ behavior: "smooth" });
 
@@ -1363,13 +1434,444 @@ function filterFeatureCards(query) {
 }
 
 // ==============================================================================
-// 7. 2D/3D SPATIAL GEOMETRY VIEWPORT (Section 11)
+// 7. INTERACTIVE GEOSPATIAL MAP VIEWPORT (Section 11)
 // ==============================================================================
 
 /**
- * Initialize 2D/3D Vector Geometry Canvas Viewport.
+ * Initialize Interactive Geospatial Map Viewport (Leaflet with 2D Canvas Fallback).
  */
 function initSpatialGeometryCanvas() {
+  const hasLeaflet = (typeof window.L !== "undefined" && leafletMapEl);
+
+  if (hasLeaflet) {
+    // 1. Initialize Leaflet Map
+    const map = L.map(leafletMapEl, {
+      zoomControl: false,
+      attributionControl: true,
+      fadeAnimation: true,
+      zoomAnimation: true,
+      minZoom: 1,
+      maxZoom: 19
+    }).setView([20, 0], 2);
+
+    // 2. High-Resolution Basemap Tile Providers (100% Free & Watermark-Free)
+    const tileLayers = {
+      streets: L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
+        maxZoom: 19
+      }),
+      satellite: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+        attribution: 'Tiles &copy; Esri &mdash; Earthstar Geographics, CNES/Airbus DS, USGS, AeroGRID, IGN',
+        maxZoom: 19
+      }),
+      topo: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}", {
+        attribution: 'Tiles &copy; Esri &mdash; USGS, FAO, NPS, NRCAN, GeoBase, Ordnance Survey',
+        maxZoom: 19
+      })
+    };
+
+    let activeBasemapKey = "auto";
+    let currentTileLayer = tileLayers.streets;
+    currentTileLayer.addTo(map);
+
+    function applyTileDarkMode(enable) {
+      if (!leafletMapEl) return;
+      if (enable) {
+        leafletMapEl.classList.add("leaflet-map-dark");
+      } else {
+        leafletMapEl.classList.remove("leaflet-map-dark");
+      }
+    }
+
+    function switchBasemap(key) {
+      activeBasemapKey = key;
+      if (currentTileLayer) {
+        map.removeLayer(currentTileLayer);
+      }
+
+      if (key === "auto") {
+        currentTileLayer = tileLayers.streets;
+        applyTileDarkMode(currentTheme === "dark");
+      } else if (key === "streets") {
+        currentTileLayer = tileLayers.streets;
+        applyTileDarkMode(false);
+      } else if (key === "satellite") {
+        currentTileLayer = tileLayers.satellite;
+        applyTileDarkMode(false);
+      } else if (key === "topo") {
+        currentTileLayer = tileLayers.topo;
+        applyTileDarkMode(false);
+      }
+
+      currentTileLayer.addTo(map);
+
+      // Synchronize basemap pill buttons
+      const pills = document.querySelectorAll(".basemap-pill");
+      pills.forEach(p => {
+        if (p.getAttribute("data-map") === key) {
+          p.classList.add("active");
+        } else {
+          p.classList.remove("active");
+        }
+      });
+    }
+
+    // Initial theme tile mode
+    applyTileDarkMode(currentTheme === "dark");
+
+    // Basemap pill click handlers
+    const pills = document.querySelectorAll(".basemap-pill");
+    pills.forEach(p => {
+      p.addEventListener("click", () => {
+        const targetMap = p.getAttribute("data-map");
+        switchBasemap(targetMap);
+      });
+    });
+
+    // Vector feature layer group
+    const featureGroup = L.featureGroup().addTo(map);
+    const layerByIndex = new Map();
+
+    // Map Telemetry HUD Coordinates Tracker
+    function updateMapHud() {
+      if (!mapHudCoords || !mapHudZoom) return;
+      const center = map.getCenter();
+      const zoom = map.getZoom();
+      const latStr = `${Math.abs(center.lat).toFixed(4)}° ${center.lat >= 0 ? "N" : "S"}`;
+      const lonStr = `${Math.abs(center.lng).toFixed(4)}° ${center.lng >= 0 ? "E" : "W"}`;
+      mapHudCoords.textContent = `Center: ${latStr}, ${lonStr}`;
+      mapHudZoom.textContent = `Zoom ${zoom}`;
+    }
+
+    map.on("move", updateMapHud);
+    map.on("zoomend", updateMapHud);
+    updateMapHud();
+
+    // Authoritative Spatial Viewer Object
+    spatialViewer = {
+      map: map,
+      featureGroup: featureGroup,
+      layerByIndex: layerByIndex,
+      features: [],
+      highlightIdx: -1,
+      isCleared: false,
+
+      loadGeometries(features) {
+        this.features = features || [];
+        this.isCleared = false;
+        this.layerByIndex.clear();
+        this.featureGroup.clearLayers();
+
+        if (geomCountBadge) {
+          geomCountBadge.textContent = `${this.features.length} Geometrie${this.features.length === 1 ? '' : 's'}`;
+        }
+
+        if (mapEmptyOverlay) {
+          mapEmptyOverlay.style.display = this.features.length ? "none" : "flex";
+          if (!this.features.length) {
+            mapEmptyOverlay.textContent = "Ingest a dataset to render vector geometry on the map.";
+          }
+        }
+
+        if (!this.features.length) {
+          this.map.setView([20, 0], 2);
+          return;
+        }
+
+        // Render each feature geometry into Leaflet
+        this.features.forEach((feat, idx) => {
+          const geom = feat.geometry;
+          if (!geom || !geom.coordinates) return;
+
+          // Find associated measurement if available
+          const meas = (currentMeasurements && currentMeasurements[idx]) ? currentMeasurements[idx] : null;
+
+          // Helper to normalize/reproject coordinates safely
+          const normCoord = (pt) => {
+            if (!Array.isArray(pt) || pt.length < 2) return [0, 0];
+            let x = pt[0];
+            let y = pt[1];
+            // Reproject if outside valid WGS84 range and proj4 is available
+            if ((Math.abs(x) > 180 || Math.abs(y) > 90) && typeof window.proj4 !== "undefined") {
+              const srcCrs = (meas && meas.input_crs) || (summaryCrs ? summaryCrs.textContent : null);
+              if (srcCrs && srcCrs !== "None") {
+                try {
+                  const projPt = window.proj4(srcCrs, "EPSG:4326", [x, y]);
+                  return [projPt[1], projPt[0]]; // Leaflet expects [lat, lon]
+                } catch (e) {
+                  // Fallback to original
+                }
+              }
+            }
+            // GeoJSON coordinates are [lon, lat], Leaflet uses [lat, lon]
+            return [y, x];
+          };
+
+          let layer = null;
+
+          if (feat.geometry_type === "Polygon") {
+            const rawCoords = geom.coordinates;
+            const rings = Array.isArray(rawCoords[0][0]) ? rawCoords : [rawCoords];
+            const latLngRings = rings.map(ring => ring.map(normCoord));
+
+            layer = L.polygon(latLngRings, {
+              color: "#10b981",
+              weight: 2.5,
+              opacity: 0.95,
+              fillColor: "#10b981",
+              fillOpacity: 0.22,
+              lineCap: "round",
+              lineJoin: "round"
+            });
+
+          } else if (feat.geometry_type === "LineString") {
+            const latLngs = geom.coordinates.map(normCoord);
+            layer = L.polyline(latLngs, {
+              color: "#f59e0b",
+              weight: 3.5,
+              opacity: 0.95,
+              lineCap: "round",
+              lineJoin: "round"
+            });
+
+          } else if (feat.geometry_type === "Point") {
+            const latLng = normCoord(geom.coordinates);
+            layer = L.circleMarker(latLng, {
+              radius: 7,
+              color: "#ffffff",
+              weight: 2,
+              fillColor: "#6366f1",
+              fillOpacity: 0.95
+            });
+          }
+
+          if (layer) {
+            // Build safe DOM popup content using standard DOM nodes
+            const popupNode = document.createElement("div");
+            popupNode.className = "map-popup-card";
+
+            const headerNode = document.createElement("div");
+            headerNode.className = "map-popup-header";
+
+            const badgeNode = document.createElement("span");
+            badgeNode.className = `map-popup-type-badge type-${feat.geometry_type.toLowerCase()}`;
+            badgeNode.textContent = feat.geometry_type.toUpperCase();
+
+            const idxNode = document.createElement("span");
+            idxNode.className = "map-popup-idx";
+            idxNode.textContent = `Feature #${idx + 1}`;
+
+            headerNode.appendChild(badgeNode);
+            headerNode.appendChild(idxNode);
+            popupNode.appendChild(headerNode);
+
+            if (meas && meas.measurement) {
+              const measRow = document.createElement("div");
+              measRow.className = "map-popup-metric-row";
+              const mLabel = document.createElement("span");
+              mLabel.className = "map-popup-metric-label";
+              mLabel.textContent = meas.measurement.type === "area" ? "Area:" : "Length:";
+              const mVal = document.createElement("span");
+              mVal.className = "map-popup-metric-val";
+              const unitStr = meas.measurement.unit === "square_meters" ? "m²" : "m";
+              mVal.textContent = `${formatNumber(meas.measurement.value, 2)} ${unitStr}`;
+              measRow.appendChild(mLabel);
+              measRow.appendChild(mVal);
+              popupNode.appendChild(measRow);
+            }
+
+            if (feat.properties && typeof feat.properties === "object") {
+              const propsNode = document.createElement("div");
+              propsNode.className = "map-popup-props";
+              Object.entries(feat.properties).slice(0, 5).forEach(([k, v]) => {
+                const pRow = document.createElement("div");
+                pRow.className = "map-popup-prop-row";
+                const pKey = document.createElement("span");
+                pKey.className = "map-popup-prop-key";
+                pKey.textContent = `${k}:`;
+                const pVal = document.createElement("span");
+                pVal.className = "map-popup-prop-val";
+                pVal.textContent = String(v);
+                pRow.appendChild(pKey);
+                pRow.appendChild(pVal);
+                propsNode.appendChild(pRow);
+              });
+              popupNode.appendChild(propsNode);
+            }
+
+            layer.bindPopup(popupNode, {
+              className: "custom-leaflet-popup",
+              closeButton: false,
+              offset: [0, -6]
+            });
+
+            // Interactive hover & selection synchronization
+            layer.on("mouseover", () => {
+              if (this.highlightIdx !== idx) {
+                if (feat.geometry_type === "Polygon") {
+                  layer.setStyle({ weight: 3.5, fillOpacity: 0.38 });
+                } else if (feat.geometry_type === "LineString") {
+                  layer.setStyle({ weight: 5 });
+                } else if (feat.geometry_type === "Point") {
+                  layer.setRadius(9);
+                }
+              }
+            });
+
+            layer.on("mouseout", () => {
+              if (this.highlightIdx !== idx) {
+                if (feat.geometry_type === "Polygon") {
+                  layer.setStyle({ weight: 2.5, fillOpacity: 0.22 });
+                } else if (feat.geometry_type === "LineString") {
+                  layer.setStyle({ weight: 3.5 });
+                } else if (feat.geometry_type === "Point") {
+                  layer.setRadius(7);
+                }
+              }
+            });
+
+            layer.on("click", () => {
+              this.highlightFeature(idx);
+              // Scroll and expand corresponding card in Section 05
+              const cards = featureCardsList ? featureCardsList.querySelectorAll(".feature-item-card") : [];
+              if (cards[idx]) {
+                cards[idx].scrollIntoView({ behavior: "smooth", block: "nearest" });
+                cards[idx].classList.add("expanded");
+              }
+            });
+
+            this.featureGroup.addLayer(layer);
+            this.layerByIndex.set(idx, { layer, feat, type: feat.geometry_type });
+          }
+        });
+
+        this.fit();
+        setTimeout(() => {
+          if (this.map) {
+            this.map.invalidateSize();
+            if (this.featureGroup && this.featureGroup.getLayers().length > 0) {
+              const bounds = this.featureGroup.getBounds();
+              if (bounds.isValid()) {
+                this.map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+              }
+            }
+          }
+        }, 120);
+      },
+
+      fit() {
+        if (this.map) {
+          this.map.invalidateSize();
+        }
+        if (this.isCleared && currentFeatures && currentFeatures.length) {
+          // Restore if currently cleared
+          this.loadGeometries(currentFeatures);
+          return;
+        }
+
+        if (this.featureGroup && this.featureGroup.getLayers().length > 0) {
+          const bounds = this.featureGroup.getBounds();
+          if (bounds.isValid()) {
+            this.map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+          }
+        } else {
+          this.map.setView([20, 0], 2);
+        }
+      },
+
+      clear() {
+        if (this.featureGroup) {
+          this.featureGroup.clearLayers();
+        }
+        this.layerByIndex.clear();
+        this.features = [];
+        this.highlightIdx = -1;
+        this.isCleared = true;
+
+        if (geomCountBadge) {
+          geomCountBadge.textContent = "0 Geometries";
+        }
+
+        this.map.closePopup();
+        this.map.setView([20, 0], 2);
+
+        if (mapEmptyOverlay) {
+          mapEmptyOverlay.textContent = "Viewport cleared. Ingest a dataset or click FIT to reload.";
+          mapEmptyOverlay.style.display = "flex";
+        }
+      },
+
+      highlightFeature(idx) {
+        // Reset previously highlighted layer
+        if (this.highlightIdx >= 0 && this.layerByIndex.has(this.highlightIdx)) {
+          const prev = this.layerByIndex.get(this.highlightIdx);
+          if (prev.type === "Polygon") {
+            prev.layer.setStyle({ color: "#10b981", weight: 2.5, fillOpacity: 0.22 });
+          } else if (prev.type === "LineString") {
+            prev.layer.setStyle({ color: "#f59e0b", weight: 3.5 });
+          } else if (prev.type === "Point") {
+            prev.layer.setRadius(7);
+            prev.layer.setStyle({ fillColor: "#6366f1" });
+          }
+        }
+
+        this.highlightIdx = idx;
+
+        if (this.layerByIndex.has(idx)) {
+          const target = this.layerByIndex.get(idx);
+          if (target.type === "Polygon") {
+            target.layer.setStyle({ color: "#34d399", weight: 4, fillOpacity: 0.45 });
+          } else if (target.type === "LineString") {
+            target.layer.setStyle({ color: "#fbbf24", weight: 5 });
+          } else if (target.type === "Point") {
+            target.layer.setRadius(10);
+            target.layer.setStyle({ fillColor: "#818cf8" });
+          }
+
+          if (target.layer.getBounds) {
+            this.map.flyToBounds(target.layer.getBounds(), { padding: [50, 50], maxZoom: 16 });
+          } else if (target.layer.getLatLng) {
+            this.map.flyTo(target.layer.getLatLng(), 15);
+          }
+
+          target.layer.openPopup();
+        }
+      },
+
+      updateTheme(theme) {
+        if (activeBasemapKey === "auto") {
+          switchBasemap("auto");
+        }
+      },
+
+      render() {
+        this.fit();
+      }
+    };
+
+    // Controls wiring
+    if (zoomInBtn) {
+      zoomInBtn.addEventListener("click", () => map.zoomIn());
+    }
+    if (zoomOutBtn) {
+      zoomOutBtn.addEventListener("click", () => map.zoomOut());
+    }
+    if (zoomFitBtn) {
+      zoomFitBtn.addEventListener("click", () => spatialViewer.fit());
+    }
+    if (clearViewBtn) {
+      clearViewBtn.addEventListener("click", () => spatialViewer.clear());
+    }
+
+    // Invalidate map size to ensure tiles render immediately
+    setTimeout(() => {
+      map.invalidateSize();
+    }, 200);
+
+    return;
+  }
+
+  // Fallback to 2D Canvas if Leaflet is not loaded
   if (!geometryCanvas) return;
 
   spatialViewer = {
@@ -1387,6 +1889,15 @@ function initSpatialGeometryCanvas() {
         geomCountBadge.textContent = `${this.features.length} Geometrie${this.features.length === 1 ? '' : 's'}`;
       }
       this.fit();
+    },
+
+    clear() {
+      this.features = [];
+      this.highlightIdx = -1;
+      if (geomCountBadge) {
+        geomCountBadge.textContent = "0 Geometries";
+      }
+      this.render();
     },
 
     fit() {
@@ -1421,7 +1932,7 @@ function initSpatialGeometryCanvas() {
       this.zoom = Math.min(scaleX, scaleY);
 
       this.offsetX = w / 2 - ((minX + maxX) / 2) * this.zoom;
-      this.offsetY = h / 2 + ((minY + maxY) / 2) * this.zoom; // Invert Y for cartesian
+      this.offsetY = h / 2 + ((minY + maxY) / 2) * this.zoom;
 
       this.render();
     },
@@ -1451,11 +1962,9 @@ function initSpatialGeometryCanvas() {
       const w = this.canvas.width;
       const h = this.canvas.height;
 
-      // Theme-aware viewport background
       ctx.fillStyle = currentTheme === "dark" ? "#070b14" : "#f8fafc";
       ctx.fillRect(0, 0, w, h);
 
-      // Subtle coordinate crosshair grid
       ctx.strokeStyle = currentTheme === "dark" ? "rgba(255, 255, 255, 0.04)" : "rgba(15, 23, 42, 0.04)";
       ctx.lineWidth = 1;
       for (let x = 0; x < w; x += 40) {
@@ -1473,7 +1982,6 @@ function initSpatialGeometryCanvas() {
         return;
       }
 
-      // Render each feature geometry
       this.features.forEach((feat, idx) => {
         const isHighlighted = (idx === this.highlightIdx);
         const geom = feat.geometry;
@@ -1547,7 +2055,7 @@ function initSpatialGeometryCanvas() {
     }
   };
 
-  // Wire viewport controls
+  // Wire viewport controls for canvas fallback
   if (zoomInBtn) {
     zoomInBtn.addEventListener("click", () => {
       spatialViewer.zoom *= 1.25;
@@ -1563,6 +2071,11 @@ function initSpatialGeometryCanvas() {
   if (zoomFitBtn) {
     zoomFitBtn.addEventListener("click", () => {
       spatialViewer.fit();
+    });
+  }
+  if (clearViewBtn) {
+    clearViewBtn.addEventListener("click", () => {
+      spatialViewer.clear();
     });
   }
 }

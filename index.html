@@ -13,6 +13,11 @@
 
   <link rel="stylesheet" href="styles.css">
 
+  <!-- Leaflet Map Engine & Proj4 Coordinate Reprojection (Offline Vendor Assets) -->
+  <link rel="stylesheet" href="./vendor/leaflet/leaflet.css">
+  <script src="./vendor/leaflet/leaflet.js"></script>
+  <script src="./vendor/proj4/proj4.js"></script>
+
   <!-- Import Map for Offline-Ready Three.js & OrbitControls -->
   <script type="importmap">
   {
@@ -496,7 +501,7 @@
            ======================================================================= -->
       <section id="spatial-explorer-section" class="spatial-explorer-section">
         <div class="explorer-grid">
-          <!-- 2D/3D Interactive Vector Geometry Viewport (Section 11) -->
+          <!-- 2D/3D Interactive Vector Geometry & Map Viewport (Section 11) -->
           <div class="card geometry-canvas-card">
             <div class="canvas-header">
               <div class="canvas-header-left">
@@ -504,17 +509,38 @@
                 <h3 class="card-title">Spatial Data View</h3>
               </div>
               <div class="canvas-header-right">
+                <div class="basemap-pills" id="basemap-pills" role="radiogroup" aria-label="Select Basemap Layer">
+                  <button type="button" class="basemap-pill active" data-map="auto" id="pill-map-auto" title="Auto (Theme Default)">THEME</button>
+                  <button type="button" class="basemap-pill" data-map="streets" id="pill-map-streets" title="OpenStreetMap Streets">STREETS</button>
+                  <button type="button" class="basemap-pill" data-map="satellite" id="pill-map-satellite" title="Satellite Imagery">SATELLITE</button>
+                  <button type="button" class="basemap-pill" data-map="topo" id="pill-map-topo" title="Topographic Map">TOPO</button>
+                </div>
                 <span class="viewport-badge" id="geom-count-badge">0 Geometries</span>
               </div>
             </div>
 
-            <div class="geometry-canvas-wrapper">
-              <canvas id="geometry-canvas" class="geometry-canvas" width="600" height="420" aria-label="Extracted Feature Geometry 2D/3D Projection"></canvas>
+            <div class="geometry-canvas-wrapper" id="map-viewport-wrapper">
+              <div id="leaflet-map" class="leaflet-map-container" aria-label="Interactive Geospatial Map Viewport"></div>
+              <canvas id="geometry-canvas" class="geometry-canvas" width="600" height="420" style="display:none;" aria-hidden="true"></canvas>
+
               <div class="canvas-controls-overlay">
-                <button type="button" id="zoom-in-btn" class="viewport-ctrl-btn" aria-label="Zoom in">+</button>
-                <button type="button" id="zoom-out-btn" class="viewport-ctrl-btn" aria-label="Zoom out">&minus;</button>
-                <button type="button" id="zoom-fit-btn" class="viewport-ctrl-btn" aria-label="Reset zoom fit">FIT</button>
+                <button type="button" id="zoom-in-btn" class="viewport-ctrl-btn" aria-label="Zoom in" title="Zoom in">+</button>
+                <button type="button" id="zoom-out-btn" class="viewport-ctrl-btn" aria-label="Zoom out" title="Zoom out">&minus;</button>
+                <button type="button" id="zoom-fit-btn" class="viewport-ctrl-btn" aria-label="Reset zoom fit" title="Fit to Geometries">FIT</button>
+                <button type="button" id="clear-view-btn" class="viewport-ctrl-btn clear-ctrl-btn" aria-label="Clear map geometries" title="Clear Map Viewport">CLEAR</button>
               </div>
+
+              <!-- Map Center & Telemetry HUD -->
+              <div class="map-coord-hud" id="map-coord-hud" aria-live="polite">
+                <span id="map-hud-coords">Center: 0.0000°, 0.0000°</span>
+                <span class="map-hud-sep">&bull;</span>
+                <span id="map-hud-zoom">Zoom 2</span>
+              </div>
+
+              <div class="map-empty-overlay" id="map-empty-overlay">
+                <span>Ingest a dataset to render vector geometry on the map.</span>
+              </div>
+
               <div class="canvas-legend">
                 <span class="legend-item"><span class="legend-dot poly-dot"></span> Polygon</span>
                 <span class="legend-item"><span class="legend-dot line-dot"></span> LineString</span>
@@ -522,7 +548,7 @@
               </div>
             </div>
             <div class="canvas-disclaimer">
-              Spatial viewport visualizes ingested geometries. Authoritative metric values derived strictly from backend.
+              Interactive map viewport visualizes ingested geometries over high-resolution geographic basemaps. Authoritative metric values derived strictly from backend.
             </div>
           </div>
 

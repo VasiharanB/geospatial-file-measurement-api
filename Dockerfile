@@ -21,11 +21,17 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Ensure persistent storage directories exist
-RUN mkdir -p /app/storage/uploads
+# Ensure persistent storage directories exist and configure unprivileged user
+RUN mkdir -p /app/storage/uploads && \
+    groupadd -r appuser && \
+    useradd -r -g appuser -u 1000 -d /app appuser && \
+    chown -R appuser:appuser /app
 
 # Copy single-file FastAPI implementation
 COPY main.py .
+
+# Switch to non-root execution for container security
+USER appuser
 
 # Expose default HTTP port
 EXPOSE 8000

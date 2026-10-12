@@ -1,0 +1,126 @@
+{
+  "audit_metadata": {
+    "title": "Geospatial File Measurement API - Security Assessment Results",
+    "timestamp": "2026-10-13T00:27:00Z",
+    "commit": "2713b50",
+    "branch": "main",
+    "environment": "Windows 11 / Python 3.14.3 / FastAPI 0.142.2",
+    "authoritative_scope": {
+      "repository": "https://github.com/VasiharanB/geospatial-file-measurement-api",
+      "frontend_url": "https://vasiharanb.github.io/geospatial-file-measurement-api/",
+      "backend_url": "https://geospatial-measurement-api-9tqz.onrender.com",
+      "docs_url": "https://geospatial-measurement-api-9tqz.onrender.com/docs"
+    }
+  },
+  "summary": {
+    "total_test_suites": 9,
+    "passed_test_suites": 9,
+    "total_scenarios": 144,
+    "passed_scenarios": 144,
+    "pass_rate_percentage": 100.0,
+    "pip_audit_vulnerabilities": 0,
+    "bandit_security_issues": 0,
+    "secret_leaks_detected": 0
+  },
+  "static_analysis": {
+    "bandit": {
+      "status": "PASS",
+      "high_severity": 0,
+      "medium_severity": 0,
+      "low_severity": 0,
+      "loc_scanned": 1210
+    },
+    "pip_audit": {
+      "status": "PASS",
+      "manifest": "requirements.txt",
+      "known_vulnerabilities": []
+    },
+    "secret_scan": {
+      "status": "PASS",
+      "git_history_inspected": true,
+      "uncommitted_env_files": 0,
+      "exposed_private_keys": 0
+    }
+  },
+  "findings": [
+    {
+      "id": "SEC-01",
+      "title": "Arbitrary API Base URL Parameter Override & Silent Exfiltration",
+      "severity": "HIGH",
+      "cwe": "CWE-601 / CWE-200",
+      "affected_component": "script.js (getAuthoritativeApiBaseUrl)",
+      "status": "REMEDIATED",
+      "regression_test": "tests/test_security_audit.py::Scenario_7"
+    },
+    {
+      "id": "SEC-02",
+      "title": "Missing Defense-in-Depth HTTP Security Response Headers",
+      "severity": "MEDIUM",
+      "cwe": "CWE-693",
+      "affected_component": "main.py (security_headers_middleware)",
+      "status": "REMEDIATED",
+      "regression_test": "tests/test_security_audit.py::Scenario_1"
+    },
+    {
+      "id": "SEC-03",
+      "title": "Missing API Request Rate Limiting / Flooding Protection",
+      "severity": "MEDIUM",
+      "cwe": "CWE-770",
+      "affected_component": "main.py (rate_limiting_middleware)",
+      "status": "REMEDIATED",
+      "regression_test": "tests/test_security_audit.py::Scenario_6"
+    },
+    {
+      "id": "SEC-04",
+      "title": "Container Execution as Root Superuser in Production Dockerfile",
+      "severity": "MEDIUM",
+      "cwe": "CWE-250",
+      "affected_component": "Dockerfile (USER appuser)",
+      "status": "REMEDIATED",
+      "regression_test": "tests/test_security_audit.py::Scenario_5"
+    },
+    {
+      "id": "SEC-05",
+      "title": "Undefined SecurityException Triggering Unhandled 500 NameError",
+      "severity": "LOW",
+      "cwe": "CWE-390",
+      "affected_component": "main.py (SecurityException class)",
+      "status": "REMEDIATED",
+      "regression_test": "tests/test_security_audit.py::Scenario_3"
+    },
+    {
+      "id": "SEC-06",
+      "title": "Incomplete URI Scheme Protocol Filtering in KML SSRF Defense",
+      "severity": "LOW",
+      "cwe": "CWE-918",
+      "affected_component": "main.py (validate_and_sanitize_kml)",
+      "status": "REMEDIATED",
+      "regression_test": "tests/test_security_audit.py::Scenario_2"
+    },
+    {
+      "id": "SEC-07",
+      "title": "Unsanitized Resource ID Reflection in 404 Error Detail",
+      "severity": "LOW",
+      "cwe": "CWE-79 / CWE-116",
+      "affected_component": "main.py (get_file_detail, get_file_measurements)",
+      "status": "REMEDIATED",
+      "regression_test": "tests/test_security_audit.py::Scenario_4"
+    },
+    {
+      "id": "SEC-08",
+      "title": "Blind Try-Except-Pass in Property Serialization",
+      "severity": "LOW",
+      "cwe": "CWE-703 (Bandit B110)",
+      "affected_component": "main.py (process_geospatial_file_sync)",
+      "status": "REMEDIATED",
+      "regression_test": "bandit -r main.py"
+    }
+  ],
+  "production_health_check": {
+    "live_backend_status": 200,
+    "live_backend_service": "Geospatial File Measurement API",
+    "live_frontend_status": 200,
+    "live_docs_status": 200,
+    "https_enforced": true
+  }
+}

@@ -327,6 +327,11 @@ class ResourceNotFoundException(GeospatialAPIError):
         super().__init__(message, status_code=status.HTTP_404_NOT_FOUND)
 
 
+class SecurityException(GeospatialAPIError):
+    def __init__(self, message: str = "Security validation error"):
+        super().__init__(message, status_code=status.HTTP_400_BAD_REQUEST)
+
+
 # ==============================================================================
 # 7. SECURITY & UPLOAD UTILITIES
 # ==============================================================================
@@ -386,7 +391,10 @@ def validate_and_sanitize_kml(content: bytes) -> None:
         elem_tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
         if elem_tag.lower() in ("networklink", "href"):
             text = (elem.text or "").strip().lower()
-            if text.startswith(("http://", "https://", "ftp://", "file://", "\\\\")):
+            if (
+                re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", text)
+                or text.startswith(("\\\\", "//", "data:", "javascript:", "vbscript:", "netdoc:"))
+            ):
                 raise MalformedFileException(
                     "KML contains external network link/resource references, which are forbidden for security."
                 )
@@ -1082,11 +1090,11 @@ def process_geospatial_file_sync(
                     # Sanitize properties (convert non-JSON-serializable types to valid JSON representations)
                     clean_props = {}
                     for k, v in raw_props.items():
-                        if hasattr(v, "item"):
+                        if hasattr(v, "item") and callable(getattr(v, "item")):
                             try:
                                 v = v.item()
-                            except Exception:
-                                pass
+                            except (ValueError, TypeError, AttributeError):
+                                logger.debug("Could not convert property value via .item(), keeping raw representation")
                         if v is None:
                             clean_props[k] = None
                         elif isinstance(v, (int, bool, str)):
@@ -1212,6 +1220,57 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ==============================================================================
+# DEFENSIVE SECURITY MIDDLEWARE: HEADERS & RATE LIMITING
+# ==============================================================================
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Inject defensive HTTP security response headers."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
+    return response
+
+
+RATE_LIMIT_PER_MINUTE = _parse_env_int("RATE_LIMIT_PER_MINUTE", 600)
+_rate_limit_lock = asyncio.Lock()
+_ip_request_timestamps: Dict[str, List[float]] = {}
+
+
+@app.middleware("http")
+async def rate_limiting_middleware(request: Request, call_next):
+    """In-memory sliding-window IP rate limiter for DoS defense."""
+    # Exempt OPTIONS preflight requests, health checks, and API docs
+    if request.method == "OPTIONS" or request.url.path in ("/api/health/", "/docs", "/redoc", "/openapi.json"):
+        return await call_next(request)
+
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    now = datetime.utcnow().timestamp()
+
+    async with _rate_limit_lock:
+        timestamps = _ip_request_timestamps.get(client_ip, [])
+        cutoff = now - 60.0
+        timestamps = [ts for ts in timestamps if ts > cutoff]
+
+        if len(timestamps) >= RATE_LIMIT_PER_MINUTE:
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={
+                    "error": "RateLimitExceeded",
+                    "detail": f"Rate limit of {RATE_LIMIT_PER_MINUTE} requests/minute exceeded. Please retry later.",
+                },
+                headers={"Retry-After": "60"},
+            )
+        timestamps.append(now)
+        _ip_request_timestamps[client_ip] = timestamps
+
+    return await call_next(request)
 
 
 # Global Exception Handlers
@@ -1398,7 +1457,8 @@ async def get_file_detail(
     clean_id = id.strip()
     file_record = db.execute(select(FileRecord).where(FileRecord.id == clean_id)).scalar_one_or_none()
     if not file_record:
-        raise ResourceNotFoundException(f"File with ID '{id}' was not found.")
+        safe_display = re.sub(r"[^a-zA-Z0-9_\-]", "", clean_id)[:64]
+        raise ResourceNotFoundException(f"File with ID '{safe_display}' was not found.")
 
     features = [
         FeatureDetailResponse(
@@ -1448,7 +1508,8 @@ async def get_file_measurements(
     clean_id = id.strip()
     file_record = db.execute(select(FileRecord).where(FileRecord.id == clean_id)).scalar_one_or_none()
     if not file_record:
-        raise ResourceNotFoundException(f"File with ID '{id}' was not found.")
+        safe_display = re.sub(r"[^a-zA-Z0-9_\-]", "", clean_id)[:64]
+        raise ResourceNotFoundException(f"File with ID '{safe_display}' was not found.")
 
     measurements = []
     for meas in file_record.measurements:
