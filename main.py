@@ -123,7 +123,9 @@ STORAGE_DIR = Path(os.environ.get("GEOSPATIAL_STORAGE_DIR", str(BASE_DIR / "stor
 DB_PATH = Path(os.environ.get("GEOSPATIAL_DB_PATH", str(BASE_DIR / "geospatial.db"))).resolve()
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DB_PATH}")
 if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
+elif DATABASE_URL.startswith("postgresql://") and not DATABASE_URL.startswith("postgresql+"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 
 # Ensure storage directory exists
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
