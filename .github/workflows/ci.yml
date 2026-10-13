@@ -36,6 +36,6 @@ jobs:
           sleep 5
           curl -f http://127.0.0.1:8000/api/health/ || cat uvicorn.log
 
-      - name: Run Full Master Regression Suite (136 Scenarios)
+      - name: Run Full Master Regression Suite (182 Scenarios)
         run: |
           python tests/run_all_tests.py
