@@ -17,27 +17,32 @@ Key Capabilities:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import logging
 import math
 import os
 import re
+import secrets
 import shutil
 import tempfile
+import time
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
+import argon2
+
 # Web & API Framework
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status, Path as APIPath
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile, status, Path as APIPath
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, Field
 
@@ -47,6 +52,7 @@ logging.basicConfig(level=logging.INFO)
 # Persistence
 from sqlalchemy import (
     JSON,
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -58,6 +64,7 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     event,
+    func,
     select,
 )
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
@@ -115,18 +122,30 @@ BASE_DIR = Path(__file__).resolve().parent
 STORAGE_DIR = Path(os.environ.get("GEOSPATIAL_STORAGE_DIR", str(BASE_DIR / "storage" / "uploads"))).resolve()
 DB_PATH = Path(os.environ.get("GEOSPATIAL_DB_PATH", str(BASE_DIR / "geospatial.db"))).resolve()
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DB_PATH}")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # Ensure storage directory exists
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
+# Developer Platform & Authentication Secrets
+API_KEY_PEPPER = os.environ.get("API_KEY_PEPPER", "gfm_dev_pepper_default_secret_32char_minimum")
+AUTH_SECRET_KEY = os.environ.get("AUTH_SECRET_KEY", "gfm_session_secret_default_32char_minimum")
+AUTH_TOKEN_EXPIRE_DAYS = int(os.environ.get("AUTH_TOKEN_EXPIRE_DAYS", "7"))
+
 
 # ==============================================================================
-# 3. DATABASE SETUP (SQLAlchemy 2.0 with SQLite WAL mode)
+# 3. DATABASE SETUP & CRYPTOGRAPHIC SECURITY HELPERS
 # ==============================================================================
 
 _engine_kwargs: Dict[str, Any] = {"pool_pre_ping": True}
 if DATABASE_URL.startswith("sqlite"):
     _engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    # PostgreSQL connection pool settings for durable restart handling
+    _engine_kwargs["pool_size"] = 10
+    _engine_kwargs["max_overflow"] = 20
+    _engine_kwargs["pool_recycle"] = 1800
 
 engine = create_engine(DATABASE_URL, **_engine_kwargs)
 
@@ -145,6 +164,51 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
 Base = declarative_base()
+
+# Argon2id password hasher instance
+_password_hasher = argon2.PasswordHasher(
+    time_cost=2,
+    memory_cost=65536,
+    parallelism=1,
+    hash_len=32,
+    type=argon2.Type.ID,
+)
+
+
+def hash_password(password: str) -> str:
+    """Hash plaintext password using Argon2id."""
+    return _password_hasher.hash(password)
+
+
+def verify_password(password: str, hash_str: str) -> bool:
+    """Verify password against Argon2id hash with timing attack resistance."""
+    try:
+        return _password_hasher.verify(hash_str, password)
+    except Exception:
+        return False
+
+
+def hash_session_token(token: str) -> str:
+    """Compute SHA-256 digest of session token with server secret."""
+    return hashlib.sha256((AUTH_SECRET_KEY + token).encode("utf-8")).hexdigest()
+
+
+def hash_api_key(raw_key: str) -> str:
+    """Compute SHA-256 digest of raw API key with deployment pepper."""
+    return hashlib.sha256((API_KEY_PEPPER + raw_key).encode("utf-8")).hexdigest()
+
+
+def generate_api_key(environment: str = "live") -> Tuple[str, str, str, str]:
+    """
+    Generate cryptographically secure API key.
+    Returns: (raw_key, prefix, last_four, key_hash)
+    """
+    prefix = "gfm_live_" if environment == "live" else "gfm_test_"
+    entropy = secrets.token_hex(16)
+    raw_key = f"{prefix}{entropy}"
+    last_four = raw_key[-4:]
+    key_hash = hash_api_key(raw_key)
+    return raw_key, prefix, last_four, key_hash
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -172,12 +236,17 @@ class FileRecord(Base):
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # Multi-tenant developer platform ownership (nullable for legacy public uploads)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
+
     features = relationship(
         "FeatureRecord", back_populates="file", cascade="all, delete-orphan", order_by="FeatureRecord.feature_index"
     )
     measurements = relationship(
         "MeasurementRecord", back_populates="file", cascade="all, delete-orphan", order_by="MeasurementRecord.feature_index"
     )
+    project = relationship("ProjectRecord", back_populates="files")
 
 
 class FeatureRecord(Base):
@@ -219,6 +288,92 @@ class MeasurementRecord(Base):
     note = Column(Text, nullable=True)
 
     file = relationship("FileRecord", back_populates="measurements")
+
+
+class UserRecord(Base):
+    __tablename__ = "users"
+
+    id = Column(String(36), primary_key=True, index=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    full_name = Column(String(255), nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    projects = relationship("ProjectRecord", back_populates="owner", cascade="all, delete-orphan")
+    sessions = relationship("SessionRecord", back_populates="user", cascade="all, delete-orphan")
+
+
+class SessionRecord(Base):
+    __tablename__ = "sessions"
+
+    id = Column(String(36), primary_key=True, index=True)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = Column(String(64), unique=True, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_active_at = Column(DateTime, default=datetime.utcnow)
+    ip_address = Column(String(45), nullable=True)
+    user_agent = Column(String(255), nullable=True)
+
+    user = relationship("UserRecord", back_populates="sessions")
+
+
+class ProjectRecord(Base):
+    __tablename__ = "projects"
+
+    id = Column(String(36), primary_key=True, index=True)
+    owner_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
+    tier = Column(String(50), default="free")
+    daily_request_limit = Column(Integer, default=1000)
+    monthly_request_limit = Column(Integer, default=10000)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    owner = relationship("UserRecord", back_populates="projects")
+    api_keys = relationship("APIKeyRecord", back_populates="project", cascade="all, delete-orphan")
+    files = relationship("FileRecord", back_populates="project")
+    usage_records = relationship("UsageRecord", back_populates="project")
+
+
+class APIKeyRecord(Base):
+    __tablename__ = "api_keys"
+
+    id = Column(String(36), primary_key=True, index=True)
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    key_prefix = Column(String(20), nullable=False)
+    last_four = Column(String(10), nullable=False)
+    key_hash = Column(String(64), unique=True, nullable=False, index=True)
+    scopes = Column(JSON, default=lambda: ["read", "write"])
+    is_revoked = Column(Boolean, default=False)
+    revoked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_used_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+
+    project = relationship("ProjectRecord", back_populates="api_keys")
+
+
+class UsageRecord(Base):
+    __tablename__ = "usage_records"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True)
+    api_key_id = Column(String(36), ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    endpoint = Column(String(255), nullable=False)
+    method = Column(String(10), nullable=False)
+    status_code = Column(Integer, nullable=False)
+    response_time_ms = Column(Float, nullable=True)
+    bytes_uploaded = Column(Integer, default=0)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+
+    project = relationship("ProjectRecord", back_populates="usage_records")
 
 
 # ==============================================================================
@@ -288,6 +443,134 @@ class ErrorResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     service: str
+
+
+# --- Developer Platform Schemas ---
+
+class UserRegisterRequest(BaseModel):
+    email: str = Field(..., max_length=255)
+    password: str = Field(..., min_length=8, max_length=128)
+    full_name: Optional[str] = Field(None, max_length=255)
+    company_name: Optional[str] = Field(None, max_length=255)
+
+
+class UserLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    full_name: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+
+
+class AuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class ProjectCreateRequest(BaseModel):
+    name: str = Field(..., max_length=255)
+    description: Optional[str] = Field(None, max_length=1000)
+    daily_request_limit: Optional[int] = Field(None, ge=1, le=1000000)
+    monthly_request_limit: Optional[int] = Field(None, ge=1, le=10000000)
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, max_length=255)
+    description: Optional[str] = Field(None, max_length=1000)
+    daily_request_limit: Optional[int] = Field(None, ge=1, le=1000000)
+    monthly_request_limit: Optional[int] = Field(None, ge=1, le=10000000)
+    is_active: Optional[bool] = None
+
+
+class ProjectResponse(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    tier: str
+    daily_request_limit: int
+    monthly_request_limit: int
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectListResponse(BaseModel):
+    projects: List[ProjectResponse]
+    total: int
+
+
+class APIKeyCreateRequest(BaseModel):
+    name: str
+    environment: str = "live"
+    scopes: Optional[List[str]] = Field(default_factory=lambda: ["read", "write"])
+    expires_in_days: Optional[int] = None
+
+
+class APIKeyCreatedResponse(BaseModel):
+    id: str
+    name: str
+    key: str  # Revealed ONLY ONCE on generation!
+    key_prefix: str
+    last_four: str
+    scopes: List[str]
+    created_at: datetime
+    expires_at: Optional[datetime] = None
+
+
+class APIKeyMetadataResponse(BaseModel):
+    id: str
+    name: str
+    key_prefix: str
+    last_four: str
+    scopes: List[str]
+    is_revoked: bool
+    revoked_at: Optional[datetime] = None
+    created_at: datetime
+    last_used_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+
+
+class APIKeyListResponse(BaseModel):
+    keys: List[APIKeyMetadataResponse]
+    total: int
+
+
+class ProjectUsageResponse(BaseModel):
+    project_id: str
+    total_requests: int
+    successful_requests: int
+    failed_requests: int
+    bytes_uploaded: int
+    daily_limit: int
+    monthly_limit: int
+    requests_today: int
+    requests_this_month: int
+
+
+class DeveloperFileSummaryResponse(BaseModel):
+    id: str
+    filename: str
+    file_type: str
+    feature_count: int
+    crs: Optional[str] = None
+    status: str
+    created_at: datetime
+
+
+class DeveloperFileListResponse(BaseModel):
+    files: List[DeveloperFileSummaryResponse]
+    total: int
 
 
 # ==============================================================================
@@ -1028,6 +1311,8 @@ def process_geospatial_file_sync(
     stored_path: Path,
     file_type: str,
     original_filename: str,
+    user_id: Optional[str] = None,
+    project_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Synchronous processing routine (run in dedicated worker thread):
@@ -1075,6 +1360,8 @@ def process_geospatial_file_sync(
             feature_count=feature_count,
             status="COMPLETED",
             error_message=None,
+            user_id=user_id,
+            project_id=project_id,
         )
 
         # Dedicated database session for this worker thread
@@ -1185,8 +1472,12 @@ def process_geospatial_file_sync(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle handler."""
-    # Create SQLite database tables on startup
     Base.metadata.create_all(bind=engine)
+    try:
+        from migrations import run_migrations
+        run_migrations(engine)
+    except Exception as e:
+        logger.warning(f"Startup migration execution note: {e}")
     yield
 
 
@@ -1358,27 +1649,12 @@ async def health_check(db: Session = Depends(get_db)):
     }
 
 
-@app.post(
-    "/api/files/",
-    response_model=FileUploadResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Upload and process a geospatial file",
-    description="Upload a .kml file or a .zip containing an ESRI Shapefile (.shp, .shx, .dbf). Extracts features, detects CRS, and computes planar measurements.",
-    tags=["Files"],
-    responses={
-        400: {"model": ErrorResponse, "description": "Malformed, invalid, or unsupported file"},
-        413: {"model": ErrorResponse, "description": "File exceeds upload size limit"},
-        422: {"model": ErrorResponse, "description": "Zero parseable features found"},
-        500: {"model": ErrorResponse, "description": "Internal server processing error"},
-    },
-)
-async def upload_file(
-    file: UploadFile = File(..., description="Geospatial file (.kml or .zip Shapefile) to upload and process"),
-):
-    """
-    Accepts .kml and .zip containing a Shapefile.
-    Validates, extracts, reprojects, measures, and persists.
-    """
+async def execute_file_ingestion(
+    file: UploadFile,
+    user_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+) -> Tuple[Dict[str, Any], int]:
+    """Execute upload validation, security guards, storage, and worker processing."""
     if not file.filename:
         raise MalformedFileException("Uploaded file has no filename.")
 
@@ -1432,7 +1708,6 @@ async def upload_file(
     saved_file_path.write_bytes(content)
 
     # Run blocking geospatial parsing & calculation in worker thread
-    # Worker thread manages its own SessionLocal session
     try:
         result = await run_in_threadpool(
             process_geospatial_file_sync,
@@ -1440,6 +1715,8 @@ async def upload_file(
             stored_path=saved_file_path,
             file_type=file_type,
             original_filename=clean_name,
+            user_id=user_id,
+            project_id=project_id,
         )
     except GeospatialAPIError:
         if file_store_dir.exists():
@@ -1451,10 +1728,32 @@ async def upload_file(
         logger.error(f"Unexpected error processing uploaded file {file_id}: {e}", exc_info=True)
         raise MalformedFileException("Failed to process geospatial file: corrupted data or unreadable format.")
 
+    return result, total_bytes
+
+
+@app.post(
+    "/api/files/",
+    response_model=FileUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload and process a geospatial file (Legacy Anonymous)",
+    description="Upload a .kml file or a .zip containing an ESRI Shapefile (.shp, .shx, .dbf). Extracts features, detects CRS, and computes planar measurements.",
+    tags=["Files"],
+    responses={
+        400: {"model": ErrorResponse, "description": "Malformed, invalid, or unsupported file"},
+        413: {"model": ErrorResponse, "description": "File exceeds upload size limit"},
+        422: {"model": ErrorResponse, "description": "Zero parseable features found"},
+        500: {"model": ErrorResponse, "description": "Internal server processing error"},
+    },
+)
+async def upload_file(
+    file: UploadFile = File(..., description="Geospatial file (.kml or .zip Shapefile) to upload and process"),
+):
+    """Legacy public anonymous upload endpoint."""
+    result, _ = await execute_file_ingestion(file, user_id=None, project_id=None)
     return FileUploadResponse(
         id=result["id"],
         filename=result["filename"],
-        file_type=result.get("file_type", file_type),
+        file_type=result.get("file_type", "unknown"),
         feature_count=result["feature_count"],
         crs=result["crs"],
         status=result["status"],
@@ -1464,8 +1763,8 @@ async def upload_file(
 @app.get(
     "/api/files/{id}/",
     response_model=FileDetailResponse,
-    summary="Get file details and features",
-    description="Retrieve metadata, CRS, and feature details for a processed geospatial file.",
+    summary="Get file details and features (Legacy Anonymous)",
+    description="Retrieve metadata, CRS, and feature details for an anonymously uploaded geospatial file.",
     tags=["Files"],
     responses={
         400: {"model": ErrorResponse, "description": "Invalid file ID format"},
@@ -1476,13 +1775,13 @@ async def get_file_detail(
     id: str = APIPath(..., description="Unique UUID identifier of the uploaded file"),
     db: Session = Depends(get_db),
 ):
-    """Retrieve file details, status, and extracted features by file ID."""
+    """Retrieve file details by file ID for anonymous files only."""
     if not id or not id.strip() or len(id) > 128:
         raise ResourceNotFoundException("Invalid or empty file ID.")
 
     clean_id = id.strip()
     file_record = db.execute(select(FileRecord).where(FileRecord.id == clean_id)).scalar_one_or_none()
-    if not file_record:
+    if not file_record or file_record.project_id is not None:
         safe_display = re.sub(r"[^a-zA-Z0-9_\-]", "", clean_id)[:64]
         raise ResourceNotFoundException(f"File with ID '{safe_display}' was not found.")
 
@@ -1515,7 +1814,7 @@ async def get_file_detail(
 @app.get(
     "/api/files/{id}/measurements/",
     response_model=FileMeasurementListResponse,
-    summary="Get measurements for a file",
+    summary="Get measurements for a file (Legacy Anonymous)",
     description="Retrieve calculated area (for Polygons) and length (for LineStrings) in metric units.",
     tags=["Measurements"],
     responses={
@@ -1527,13 +1826,13 @@ async def get_file_measurements(
     id: str = APIPath(..., description="Unique UUID identifier of the uploaded file"),
     db: Session = Depends(get_db),
 ):
-    """Retrieve measurement results for all features in the file."""
+    """Retrieve measurement results by file ID for anonymous files only."""
     if not id or not id.strip() or len(id) > 128:
         raise ResourceNotFoundException("Invalid or empty file ID.")
 
     clean_id = id.strip()
     file_record = db.execute(select(FileRecord).where(FileRecord.id == clean_id)).scalar_one_or_none()
-    if not file_record:
+    if not file_record or file_record.project_id is not None:
         safe_display = re.sub(r"[^a-zA-Z0-9_\-]", "", clean_id)[:64]
         raise ResourceNotFoundException(f"File with ID '{safe_display}' was not found.")
 
@@ -1566,6 +1865,983 @@ async def get_file_measurements(
         total_features=len(measurements),
         measurements=measurements,
     )
+
+
+# ==============================================================================
+# DEVELOPER PLATFORM AUTHENTICATION & CONTEXT DEPENDENCIES
+# ==============================================================================
+
+@dataclass
+class APIKeyContext:
+    key: APIKeyRecord
+    project: ProjectRecord
+    user_id: str
+
+
+def record_api_usage(
+    db: Session,
+    project_id: Optional[str],
+    api_key_id: Optional[str],
+    user_id: Optional[str],
+    endpoint: str,
+    method: str,
+    status_code: int,
+    response_time_ms: float,
+    bytes_uploaded: int = 0,
+) -> None:
+    """Record verified developer API usage for accounting and operational analytics."""
+    try:
+        usage = UsageRecord(
+            project_id=project_id,
+            api_key_id=api_key_id,
+            user_id=user_id,
+            endpoint=endpoint,
+            method=method,
+            status_code=status_code,
+            response_time_ms=response_time_ms,
+            bytes_uploaded=bytes_uploaded,
+            timestamp=datetime.utcnow(),
+        )
+        db.add(usage)
+        db.commit()
+    except Exception as e:
+        logger.error(f"Failed to record API usage metric: {e}")
+        db.rollback()
+
+
+def get_current_user(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> UserRecord:
+    """Resolve authenticated developer from Bearer token or session cookie."""
+    auth_header = request.headers.get("Authorization")
+    token = None
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+    if not token:
+        token = request.cookies.get("session_token")
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required. Please provide a valid Bearer token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token_hash = hash_session_token(token)
+    session_rec = db.execute(
+        select(SessionRecord).where(
+            SessionRecord.token_hash == token_hash,
+            SessionRecord.expires_at > datetime.utcnow(),
+        )
+    ).scalar_one_or_none()
+
+    if not session_rec:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session has expired or is invalid. Please sign in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    session_rec.last_active_at = datetime.utcnow()
+    db.commit()
+
+    user = db.execute(select(UserRecord).where(UserRecord.id == session_rec.user_id)).scalar_one_or_none()
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Developer account is deactivated or unavailable.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return user
+
+
+def get_api_key_context(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> APIKeyContext:
+    """Authenticate incoming developer requests via X-API-Key or Bearer API key."""
+    raw_key = request.headers.get("X-API-Key")
+    if not raw_key:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            candidate = auth_header[7:].strip()
+            if candidate.startswith("gfm_live_") or candidate.startswith("gfm_test_"):
+                raw_key = candidate
+
+    if not raw_key or not (raw_key.startswith("gfm_live_") or raw_key.startswith("gfm_test_")):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Valid API key required. Provide via 'X-API-Key' header.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+
+    key_hash = hash_api_key(raw_key)
+    key_rec = db.execute(select(APIKeyRecord).where(APIKeyRecord.key_hash == key_hash)).scalar_one_or_none()
+
+    if not key_rec or key_rec.is_revoked:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or revoked API key.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+
+    if key_rec.expires_at and key_rec.expires_at < datetime.utcnow():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="API key has expired.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+
+    project = db.execute(select(ProjectRecord).where(ProjectRecord.id == key_rec.project_id)).scalar_one_or_none()
+    if not project or not project.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Associated project is inactive or disabled.",
+        )
+
+    # Enforce daily request quotas
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_requests = db.execute(
+        select(func.count(UsageRecord.id)).where(
+            UsageRecord.project_id == project.id,
+            UsageRecord.timestamp >= today_start,
+        )
+    ).scalar_one() or 0
+
+    if today_requests >= project.daily_request_limit:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Daily request quota ({project.daily_request_limit}) exceeded for project '{project.name}'.",
+        )
+
+    key_rec.last_used_at = datetime.utcnow()
+    # Record usage for non-upload developer endpoints (upload endpoint records its own metrics with byte counts)
+    if not (request.url.path == "/api/v1/files/" and request.method == "POST"):
+        record_api_usage(
+            db,
+            project_id=project.id,
+            api_key_id=key_rec.id,
+            user_id=project.owner_id,
+            endpoint=request.url.path,
+            method=request.method,
+            status_code=200,
+            response_time_ms=1.0,
+            bytes_uploaded=0,
+        )
+    db.commit()
+
+    return APIKeyContext(key=key_rec, project=project, user_id=project.owner_id)
+
+
+# ==============================================================================
+# DEVELOPER PLATFORM V1 ROUTER & ENDPOINTS
+# ==============================================================================
+
+# --- 1. Developer Identity & Authentication ---
+
+@app.post(
+    "/api/v1/auth/register",
+    response_model=AuthTokenResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a new developer account",
+    tags=["Developer Platform - Auth"],
+)
+async def register_developer(req: UserRegisterRequest, db: Session = Depends(get_db)):
+    """Register a developer account with Argon2id hashing and auto-generate default project."""
+    clean_email = req.email.strip().lower()
+    if not re.match(r"^[\w\.\+\-]+@[\w\-]+\.[\w\.\-]+$", clean_email):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid email address format.")
+    if len(req.password) < 8:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password must be at least 8 characters long.")
+
+    existing = db.execute(select(UserRecord).where(UserRecord.email == clean_email)).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An account with this email address already exists.")
+
+    user_id = str(uuid.uuid4())
+    user = UserRecord(
+        id=user_id,
+        email=clean_email,
+        password_hash=hash_password(req.password),
+        full_name=req.full_name,
+        is_active=True,
+        created_at=datetime.utcnow(),
+    )
+    db.add(user)
+    db.flush()
+
+    # Automatically provision default project
+    default_project = ProjectRecord(
+        id=str(uuid.uuid4()),
+        owner_id=user.id,
+        name="Default Project",
+        description="Default workspace project for API keys and survey calculations",
+        created_at=datetime.utcnow(),
+    )
+    db.add(default_project)
+
+    # Generate initial session token
+    raw_token = f"gfm_sess_{secrets.token_urlsafe(32)}"
+    session_rec = SessionRecord(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        token_hash=hash_session_token(raw_token),
+        expires_at=datetime.utcnow() + timedelta(days=AUTH_TOKEN_EXPIRE_DAYS),
+        created_at=datetime.utcnow(),
+    )
+    db.add(session_rec)
+    db.commit()
+
+    user_resp = UserResponse(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        is_active=user.is_active,
+        created_at=user.created_at,
+    )
+    return AuthTokenResponse(access_token=raw_token, token_type="bearer", user=user_resp)  # nosec B106
+
+
+@app.post(
+    "/api/v1/auth/login",
+    response_model=AuthTokenResponse,
+    summary="Sign in to developer account",
+    tags=["Developer Platform - Auth"],
+)
+async def login_developer(req: UserLoginRequest, db: Session = Depends(get_db)):
+    """Authenticate developer credentials and return a secure session token."""
+    clean_email = req.email.strip().lower()
+    user = db.execute(select(UserRecord).where(UserRecord.email == clean_email)).scalar_one_or_none()
+    if not user or not verify_password(req.password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password.")
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Developer account is deactivated.")
+
+    raw_token = f"gfm_sess_{secrets.token_urlsafe(32)}"
+    session_rec = SessionRecord(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        token_hash=hash_session_token(raw_token),
+        expires_at=datetime.utcnow() + timedelta(days=AUTH_TOKEN_EXPIRE_DAYS),
+        created_at=datetime.utcnow(),
+    )
+    db.add(session_rec)
+    db.commit()
+
+    user_resp = UserResponse(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        is_active=user.is_active,
+        created_at=user.created_at,
+    )
+    return AuthTokenResponse(access_token=raw_token, token_type="bearer", user=user_resp)  # nosec B106
+
+
+@app.get(
+    "/api/v1/auth/me",
+    response_model=UserResponse,
+    summary="Get current authenticated developer profile",
+    tags=["Developer Platform - Auth"],
+)
+async def get_me(current_user: UserRecord = Depends(get_current_user)):
+    """Return profile for active session."""
+    return UserResponse(
+        id=current_user.id,
+        email=current_user.email,
+        full_name=current_user.full_name,
+        is_active=current_user.is_active,
+        created_at=current_user.created_at,
+    )
+
+
+@app.post(
+    "/api/v1/auth/logout",
+    summary="Sign out of developer account",
+    tags=["Developer Platform - Auth"],
+)
+async def logout_developer(
+    request: Request,
+    current_user: UserRecord = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Invalidate current session token."""
+    auth_header = request.headers.get("Authorization")
+    token = auth_header[7:].strip() if auth_header and auth_header.startswith("Bearer ") else request.cookies.get("session_token")
+    if token:
+        token_hash = hash_session_token(token)
+        session_rec = db.execute(select(SessionRecord).where(SessionRecord.token_hash == token_hash)).scalar_one_or_none()
+        if session_rec:
+            db.delete(session_rec)
+            db.commit()
+    return {"status": "ok", "message": "Signed out successfully."}
+
+
+@app.post(
+    "/api/v1/auth/change-password",
+    summary="Change developer password",
+    tags=["Developer Platform - Auth"],
+)
+async def change_password(
+    req: ChangePasswordRequest,
+    current_user: UserRecord = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Update password and invalidate all active sessions."""
+    if not verify_password(req.current_password, current_user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password does not match.")
+    if len(req.new_password) < 8:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New password must be at least 8 characters long.")
+
+    current_user.password_hash = hash_password(req.new_password)
+    # Revoke sessions
+    for sess in current_user.sessions:
+        db.delete(sess)
+    db.commit()
+    return {"status": "ok", "message": "Password changed successfully. Please sign in again."}
+
+
+# --- 2. Developer Project Management ---
+
+@app.post(
+    "/api/v1/projects/",
+    response_model=ProjectResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new developer project",
+    tags=["Developer Platform - Projects"],
+)
+async def create_project(
+    req: ProjectCreateRequest,
+    current_user: UserRecord = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Create a new tenant project owned by the authenticated developer."""
+    if not req.name.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Project name is required.")
+
+    project = ProjectRecord(
+        id=str(uuid.uuid4()),
+        owner_id=current_user.id,
+        name=req.name.strip(),
+        description=req.description,
+        is_active=True,
+        tier="free",
+        daily_request_limit=req.daily_request_limit if req.daily_request_limit is not None else 1000,
+        monthly_request_limit=req.monthly_request_limit if req.monthly_request_limit is not None else 10000,
+        created_at=datetime.utcnow(),
+    )
+    db.add(project)
+    db.commit()
+    return ProjectResponse(
+        id=project.id,
+        name=project.name,
+        description=project.description,
+        tier=project.tier,
+        daily_request_limit=project.daily_request_limit,
+        monthly_request_limit=project.monthly_request_limit,
+        is_active=project.is_active,
+        created_at=project.created_at,
+        updated_at=project.updated_at,
+    )
+
+
+@app.get(
+    "/api/v1/projects/",
+    response_model=ProjectListResponse,
+    summary="List developer projects",
+    tags=["Developer Platform - Projects"],
+)
+async def list_projects(
+    current_user: UserRecord = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List all projects owned by the authenticated developer."""
+    projects = db.execute(
+        select(ProjectRecord).where(ProjectRecord.owner_id == current_user.id).order_by(ProjectRecord.created_at.desc())
+    ).scalars().all()
+
+    resp_list = [
+        ProjectResponse(
+            id=p.id,
+            name=p.name,
+            description=p.description,
+            tier=p.tier,
+            daily_request_limit=p.daily_request_limit,
+            monthly_request_limit=p.monthly_request_limit,
+            is_active=p.is_active,
+            created_at=p.created_at,
+            updated_at=p.updated_at,
+        )
+        for p in projects
+    ]
+    return ProjectListResponse(projects=resp_list, total=len(resp_list))
+
+
+@app.get(
+    "/api/v1/projects/{project_id}",
+    response_model=ProjectResponse,
+    summary="Get project details",
+    tags=["Developer Platform - Projects"],
+)
+async def get_project(
+    project_id: str,
+    current_user: UserRecord = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Retrieve details for a specific project. Enforces ownership verification."""
+    project = db.execute(select(ProjectRecord).where(ProjectRecord.id == project_id)).scalar_one_or_none()
+    if not project or project.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    return ProjectResponse(
+        id=project.id,
+        name=project.name,
+        description=project.description,
+        tier=project.tier,
+        daily_request_limit=project.daily_request_limit,
+        monthly_request_limit=project.monthly_request_limit,
+        is_active=project.is_active,
+        created_at=project.created_at,
+        updated_at=project.updated_at,
+    )
+
+
+@app.patch(
+    "/api/v1/projects/{project_id}",
+    response_model=ProjectResponse,
+    summary="Update project metadata",
+    tags=["Developer Platform - Projects"],
+)
+async def update_project(
+    project_id: str,
+    req: ProjectUpdateRequest,
+    current_user: UserRecord = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Update name or description for a project. Enforces ownership."""
+    project = db.execute(select(ProjectRecord).where(ProjectRecord.id == project_id)).scalar_one_or_none()
+    if not project or project.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    if req.name is not None and req.name.strip():
+        project.name = req.name.strip()
+    if req.description is not None:
+        project.description = req.description
+    if req.daily_request_limit is not None:
+        project.daily_request_limit = req.daily_request_limit
+    if req.monthly_request_limit is not None:
+        project.monthly_request_limit = req.monthly_request_limit
+    if req.is_active is not None:
+        project.is_active = req.is_active
+    project.updated_at = datetime.utcnow()
+    db.commit()
+
+    return ProjectResponse(
+        id=project.id,
+        name=project.name,
+        description=project.description,
+        tier=project.tier,
+        daily_request_limit=project.daily_request_limit,
+        monthly_request_limit=project.monthly_request_limit,
+        is_active=project.is_active,
+        created_at=project.created_at,
+        updated_at=project.updated_at,
+    )
+
+
+@app.delete(
+    "/api/v1/projects/{project_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a project",
+    tags=["Developer Platform - Projects"],
+)
+async def delete_project(
+    project_id: str,
+    current_user: UserRecord = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Delete project and associated API keys. Enforces ownership."""
+    project = db.execute(select(ProjectRecord).where(ProjectRecord.id == project_id)).scalar_one_or_none()
+    if not project or project.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    db.delete(project)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- 3. API Key Management ---
+
+@app.post(
+    "/api/v1/projects/{project_id}/api-keys/",
+    response_model=APIKeyCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Generate a new API key for a project",
+    tags=["Developer Platform - API Keys"],
+)
+async def create_api_key(
+    project_id: str,
+    req: APIKeyCreateRequest,
+    current_user: UserRecord = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Generate a new API key.
+    The raw key is returned STRICTLY ONCE in this response and is never stored in recoverable plaintext.
+    """
+    project = db.execute(select(ProjectRecord).where(ProjectRecord.id == project_id)).scalar_one_or_none()
+    if not project or project.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    raw_key, prefix, last_four, key_hash = generate_api_key(req.environment)
+    expires_at = None
+    if req.expires_in_days and req.expires_in_days > 0:
+        expires_at = datetime.utcnow() + timedelta(days=req.expires_in_days)
+
+    key_rec = APIKeyRecord(
+        id=str(uuid.uuid4()),
+        project_id=project.id,
+        name=req.name.strip() if req.name else "API Key",
+        key_prefix=prefix,
+        last_four=last_four,
+        key_hash=key_hash,
+        scopes=req.scopes or ["read", "write"],
+        is_revoked=False,
+        created_at=datetime.utcnow(),
+        expires_at=expires_at,
+    )
+    db.add(key_rec)
+    db.commit()
+
+    return APIKeyCreatedResponse(
+        id=key_rec.id,
+        name=key_rec.name,
+        key=raw_key,
+        key_prefix=key_rec.key_prefix,
+        last_four=key_rec.last_four,
+        scopes=key_rec.scopes or ["read", "write"],
+        created_at=key_rec.created_at,
+        expires_at=key_rec.expires_at,
+    )
+
+
+@app.get(
+    "/api/v1/projects/{project_id}/api-keys/",
+    response_model=APIKeyListResponse,
+    summary="List API keys for a project",
+    tags=["Developer Platform - API Keys"],
+)
+async def list_api_keys(
+    project_id: str,
+    current_user: UserRecord = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List API key metadata for a project. Never exposes stored secrets."""
+    project = db.execute(select(ProjectRecord).where(ProjectRecord.id == project_id)).scalar_one_or_none()
+    if not project or project.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    keys = db.execute(
+        select(APIKeyRecord).where(APIKeyRecord.project_id == project.id).order_by(APIKeyRecord.created_at.desc())
+    ).scalars().all()
+
+    resp_keys = [
+        APIKeyMetadataResponse(
+            id=k.id,
+            name=k.name,
+            key_prefix=k.key_prefix,
+            last_four=k.last_four,
+            scopes=k.scopes or ["read", "write"],
+            is_revoked=k.is_revoked,
+            revoked_at=k.revoked_at,
+            created_at=k.created_at,
+            last_used_at=k.last_used_at,
+            expires_at=k.expires_at,
+        )
+        for k in keys
+    ]
+    return APIKeyListResponse(keys=resp_keys, total=len(resp_keys))
+
+
+@app.post(
+    "/api/v1/projects/{project_id}/api-keys/{key_id}/revoke",
+    summary="Revoke an API key immediately",
+    tags=["Developer Platform - API Keys"],
+)
+async def revoke_api_key(
+    project_id: str,
+    key_id: str,
+    current_user: UserRecord = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Immediately revoke an API key. Enforces project and key ownership."""
+    project = db.execute(select(ProjectRecord).where(ProjectRecord.id == project_id)).scalar_one_or_none()
+    if not project or project.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    key_rec = db.execute(
+        select(APIKeyRecord).where(APIKeyRecord.id == key_id, APIKeyRecord.project_id == project.id)
+    ).scalar_one_or_none()
+    if not key_rec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found.")
+
+    key_rec.is_revoked = True
+    key_rec.revoked_at = datetime.utcnow()
+    db.commit()
+    return {"status": "ok", "message": "API key has been revoked successfully."}
+
+
+@app.post(
+    "/api/v1/projects/{project_id}/api-keys/{key_id}/rotate",
+    response_model=APIKeyCreatedResponse,
+    summary="Rotate an API key (revoke old, generate new)",
+    tags=["Developer Platform - API Keys"],
+)
+async def rotate_api_key(
+    project_id: str,
+    key_id: str,
+    current_user: UserRecord = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Atomically revoke the existing key and generate a fresh replacement."""
+    project = db.execute(select(ProjectRecord).where(ProjectRecord.id == project_id)).scalar_one_or_none()
+    if not project or project.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    old_key = db.execute(
+        select(APIKeyRecord).where(APIKeyRecord.id == key_id, APIKeyRecord.project_id == project.id)
+    ).scalar_one_or_none()
+    if not old_key:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found.")
+
+    # Revoke old key
+    old_key.is_revoked = True
+    old_key.revoked_at = datetime.utcnow()
+
+    # Generate new key
+    raw_key, prefix, last_four, key_hash = generate_api_key(
+        "live" if old_key.key_prefix == "gfm_live_" else "test"
+    )
+    new_key = APIKeyRecord(
+        id=str(uuid.uuid4()),
+        project_id=project.id,
+        name=f"{old_key.name} (Rotated)",
+        key_prefix=prefix,
+        last_four=last_four,
+        key_hash=key_hash,
+        scopes=old_key.scopes or ["read", "write"],
+        is_revoked=False,
+        created_at=datetime.utcnow(),
+        expires_at=old_key.expires_at,
+    )
+    db.add(new_key)
+    db.commit()
+
+    return APIKeyCreatedResponse(
+        id=new_key.id,
+        name=new_key.name,
+        key=raw_key,
+        key_prefix=new_key.key_prefix,
+        last_four=new_key.last_four,
+        scopes=new_key.scopes or ["read", "write"],
+        created_at=new_key.created_at,
+        expires_at=new_key.expires_at,
+    )
+
+
+# --- 4. Usage Analytics ---
+
+@app.get(
+    "/api/v1/projects/{project_id}/usage",
+    response_model=ProjectUsageResponse,
+    summary="Get real-time project usage analytics and quota metrics",
+    tags=["Developer Platform - Usage"],
+)
+async def get_project_usage(
+    project_id: str,
+    current_user: UserRecord = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Aggregate actual API request counts, uploaded bytes, and quota metrics for a project."""
+    project = db.execute(select(ProjectRecord).where(ProjectRecord.id == project_id)).scalar_one_or_none()
+    if not project or project.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    now = datetime.utcnow()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    total_requests = db.execute(
+        select(func.count(UsageRecord.id)).where(UsageRecord.project_id == project.id)
+    ).scalar_one() or 0
+
+    successful_requests = db.execute(
+        select(func.count(UsageRecord.id)).where(
+            UsageRecord.project_id == project.id,
+            UsageRecord.status_code >= 200,
+            UsageRecord.status_code < 400,
+        )
+    ).scalar_one() or 0
+
+    failed_requests = db.execute(
+        select(func.count(UsageRecord.id)).where(
+            UsageRecord.project_id == project.id,
+            UsageRecord.status_code >= 400,
+        )
+    ).scalar_one() or 0
+
+    bytes_uploaded = db.execute(
+        select(func.sum(UsageRecord.bytes_uploaded)).where(UsageRecord.project_id == project.id)
+    ).scalar_one() or 0
+
+    requests_today = db.execute(
+        select(func.count(UsageRecord.id)).where(
+            UsageRecord.project_id == project.id,
+            UsageRecord.timestamp >= today_start,
+        )
+    ).scalar_one() or 0
+
+    requests_this_month = db.execute(
+        select(func.count(UsageRecord.id)).where(
+            UsageRecord.project_id == project.id,
+            UsageRecord.timestamp >= month_start,
+        )
+    ).scalar_one() or 0
+
+    return ProjectUsageResponse(
+        project_id=project.id,
+        total_requests=total_requests,
+        successful_requests=successful_requests,
+        failed_requests=failed_requests,
+        bytes_uploaded=int(bytes_uploaded),
+        daily_limit=project.daily_request_limit,
+        monthly_limit=project.monthly_request_limit,
+        requests_today=requests_today,
+        requests_this_month=requests_this_month,
+    )
+
+
+# --- 5. Versioned Geospatial API Routes (API-Key Protected & Tenant Isolated) ---
+
+@app.post(
+    "/api/v1/files/",
+    response_model=FileUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload and process geospatial file (API-Key Protected)",
+    description="Upload a .kml file or a .zip containing an ESRI Shapefile. Associates survey data with the authenticated developer project.",
+    tags=["Developer Platform - Files"],
+)
+async def developer_upload_file(
+    file: UploadFile = File(..., description="Geospatial file (.kml or .zip Shapefile) to process"),
+    ctx: APIKeyContext = Depends(get_api_key_context),
+    db: Session = Depends(get_db),
+):
+    """Ingest geospatial file under authenticated tenant project."""
+    start_time = time.time()
+    try:
+        result, byte_count = await execute_file_ingestion(file, user_id=ctx.user_id, project_id=ctx.project.id)
+        elapsed_ms = (time.time() - start_time) * 1000.0
+        record_api_usage(
+            db,
+            project_id=ctx.project.id,
+            api_key_id=ctx.key.id,
+            user_id=ctx.user_id,
+            endpoint="/api/v1/files/",
+            method="POST",
+            status_code=201,
+            response_time_ms=elapsed_ms,
+            bytes_uploaded=byte_count,
+        )
+        return FileUploadResponse(
+            id=result["id"],
+            filename=result["filename"],
+            file_type=result.get("file_type", "unknown"),
+            feature_count=result["feature_count"],
+            crs=result["crs"],
+            status=result["status"],
+        )
+    except Exception as e:
+        elapsed_ms = (time.time() - start_time) * 1000.0
+        status_code = getattr(e, "status_code", 400)
+        record_api_usage(
+            db,
+            project_id=ctx.project.id,
+            api_key_id=ctx.key.id,
+            user_id=ctx.user_id,
+            endpoint="/api/v1/files/",
+            method="POST",
+            status_code=status_code,
+            response_time_ms=elapsed_ms,
+            bytes_uploaded=0,
+        )
+        raise
+
+
+@app.get(
+    "/api/v1/files/",
+    response_model=DeveloperFileListResponse,
+    summary="List files belonging to the authenticated project",
+    tags=["Developer Platform - Files"],
+)
+async def list_project_files(
+    ctx: APIKeyContext = Depends(get_api_key_context),
+    db: Session = Depends(get_db),
+):
+    """List all survey files associated with the active API key's project."""
+    files = db.execute(
+        select(FileRecord).where(FileRecord.project_id == ctx.project.id).order_by(FileRecord.created_at.desc())
+    ).scalars().all()
+
+    resp_files = [
+        DeveloperFileSummaryResponse(
+            id=f.id,
+            filename=f.filename,
+            file_type=f.file_type,
+            feature_count=f.feature_count,
+            crs=f.crs,
+            status=f.status,
+            created_at=f.created_at,
+        )
+        for f in files
+    ]
+    return DeveloperFileListResponse(files=resp_files, total=len(resp_files))
+
+
+@app.get(
+    "/api/v1/files/{id}/",
+    response_model=FileDetailResponse,
+    summary="Get file details (Tenant-Isolated)",
+    tags=["Developer Platform - Files"],
+)
+async def get_developer_file_detail(
+    id: str = APIPath(..., description="Unique file UUID"),
+    ctx: APIKeyContext = Depends(get_api_key_context),
+    db: Session = Depends(get_db),
+):
+    """Retrieve file details. Enforces project-level tenant ownership."""
+    if not id or not id.strip() or len(id) > 128:
+        raise ResourceNotFoundException("Invalid or empty file ID.")
+
+    clean_id = id.strip()
+    file_record = db.execute(select(FileRecord).where(FileRecord.id == clean_id)).scalar_one_or_none()
+    if not file_record or file_record.project_id != ctx.project.id:
+        raise ResourceNotFoundException("File not found.")
+
+    features = [
+        FeatureDetailResponse(
+            feature_id=feat.feature_index,
+            geometry_type=feat.geometry_type,
+            geometry=feat.geometry_geojson,
+            crs=file_record.crs,
+            properties=feat.properties or {},
+            status=feat.status,
+            error_message=feat.error_message,
+        )
+        for feat in file_record.features
+    ]
+
+    return FileDetailResponse(
+        id=file_record.id,
+        filename=file_record.filename,
+        file_type=file_record.file_type,
+        feature_count=file_record.feature_count,
+        crs=file_record.crs,
+        status=file_record.status,
+        error_message=file_record.error_message,
+        created_at=file_record.created_at,
+        features=features,
+    )
+
+
+@app.get(
+    "/api/v1/files/{id}/measurements/",
+    response_model=FileMeasurementListResponse,
+    summary="Get measurements (Tenant-Isolated)",
+    tags=["Developer Platform - Files"],
+)
+async def get_developer_file_measurements(
+    id: str = APIPath(..., description="Unique file UUID"),
+    ctx: APIKeyContext = Depends(get_api_key_context),
+    db: Session = Depends(get_db),
+):
+    """Retrieve geometric measurements. Enforces project-level tenant ownership."""
+    if not id or not id.strip() or len(id) > 128:
+        raise ResourceNotFoundException("Invalid or empty file ID.")
+
+    clean_id = id.strip()
+    file_record = db.execute(select(FileRecord).where(FileRecord.id == clean_id)).scalar_one_or_none()
+    if not file_record or file_record.project_id != ctx.project.id:
+        raise ResourceNotFoundException("File not found.")
+
+    measurements = []
+    for meas in file_record.measurements:
+        detail = None
+        if meas.measurement_type in ("area", "length") and meas.measurement_value is not None:
+            detail = MeasurementDetail(
+                type=meas.measurement_type,
+                value=meas.measurement_value,
+                unit=meas.unit,
+                input_crs=meas.input_crs,
+                projected_crs=meas.projected_crs,
+            )
+
+        measurements.append(
+            FeatureMeasurementResponse(
+                feature_id=meas.feature_index,
+                geometry_type=meas.geometry_type,
+                status=meas.status,
+                measurement=detail,
+                note=meas.note,
+            )
+        )
+
+    return FileMeasurementListResponse(
+        file_id=file_record.id,
+        filename=file_record.filename,
+        status=file_record.status,
+        total_features=len(measurements),
+        measurements=measurements,
+    )
+
+
+@app.delete(
+    "/api/v1/files/{id}/",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Securely delete a file and associated data (Tenant-Isolated)",
+    tags=["Developer Platform - Files"],
+)
+async def delete_developer_file(
+    id: str = APIPath(..., description="Unique file UUID"),
+    ctx: APIKeyContext = Depends(get_api_key_context),
+    db: Session = Depends(get_db),
+):
+    """Securely purge file record, features, measurements, and disk files. Enforces ownership."""
+    clean_id = id.strip()
+    file_record = db.execute(select(FileRecord).where(FileRecord.id == clean_id)).scalar_one_or_none()
+    if not file_record or file_record.project_id != ctx.project.id:
+        raise ResourceNotFoundException("File not found.")
+
+    file_store_dir = (STORAGE_DIR / file_record.id).resolve()
+    if file_store_dir.exists() and str(file_store_dir).startswith(str(STORAGE_DIR)):
+        shutil.rmtree(file_store_dir, ignore_errors=True)
+
+    db.delete(file_record)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- 6. Developer Console UI Routes ---
+
+@app.get("/console", response_class=HTMLResponse, summary="Developer Console Web UI", tags=["Developer Console"])
+@app.get("/portal", response_class=HTMLResponse, summary="Developer Portal Web UI", tags=["Developer Console"])
+async def serve_developer_console():
+    """Serve the self-service Developer Console."""
+    portal_path = BASE_DIR / "portal.html"
+    if portal_path.exists():
+        return FileResponse(str(portal_path), media_type="text/html")
+    return HTMLResponse("<h1>Developer Console</h1><p>portal.html not found</p>", status_code=200)
 
 
 # ==============================================================================

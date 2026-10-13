@@ -76,6 +76,20 @@ function getAuthoritativeApiBaseUrl() {
 
 const API_BASE_URL = getAuthoritativeApiBaseUrl();
 
+// Synchronize navigation links to authoritative backend
+try {
+  const docLink = document.querySelector('.doc-link');
+  if (docLink) {
+    docLink.href = `${API_BASE_URL}/docs`;
+  }
+  const portalLink = document.getElementById('nav-portal-link');
+  if (portalLink) {
+    portalLink.href = `${API_BASE_URL}/portal`;
+  }
+} catch (e) {
+  // Graceful fallback
+}
+
 // Allowed extensions and bounded stream limit (25 MB)
 const ALLOWED_EXTENSIONS = [".kml", ".zip"];
 const MAX_UPLOAD_SIZE_BYTES = 25 * 1024 * 1024;

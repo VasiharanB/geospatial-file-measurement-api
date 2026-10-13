@@ -27,8 +27,8 @@ RUN mkdir -p /app/storage/uploads && \
     useradd -r -g appuser -u 1000 -d /app appuser && \
     chown -R appuser:appuser /app
 
-# Copy single-file FastAPI implementation
-COPY main.py .
+# Copy application implementation, migrations, and developer portal
+COPY main.py migrations.py portal.html ./
 
 # Switch to non-root execution for container security
 USER appuser

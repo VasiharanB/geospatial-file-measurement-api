@@ -1,0 +1,1307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Geospatial Developer Console | API Management</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-base: #0a0e17;
+      --bg-surface: #111827;
+      --bg-elevated: #1e293b;
+      --bg-hover: #334155;
+      --border-subtle: #1e293b;
+      --border-focus: #3b82f6;
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent-blue: #3b82f6;
+      --accent-indigo: #6366f1;
+      --accent-emerald: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-rose: #f43f5e;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 16px;
+      --shadow-lg: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-base);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* Top Navigation */
+    .top-bar {
+      height: 64px;
+      background: rgba(17, 24, 39, 0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 28px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: inherit;
+    }
+
+    .brand-icon {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 16px;
+    }
+
+    .brand-title {
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .brand-badge {
+      font-size: 11px;
+      text-transform: uppercase;
+      font-weight: 600;
+      background: rgba(59, 130, 246, 0.15);
+      color: var(--accent-blue);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .project-selector {
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 6px 12px;
+      font-size: 13px;
+      font-family: var(--font-sans);
+      outline: none;
+      cursor: pointer;
+    }
+
+    .project-selector:focus {
+      border-color: var(--border-focus);
+    }
+
+    .user-profile {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .user-email {
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .btn {
+      padding: 8px 16px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-weight: 500;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: none;
+      transition: all 0.15s ease;
+      text-decoration: none;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    }
+
+    .btn-secondary {
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .btn-secondary:hover {
+      background: var(--bg-hover);
+    }
+
+    .btn-danger {
+      background: rgba(244, 63, 94, 0.15);
+      color: var(--accent-rose);
+      border: 1px solid rgba(244, 63, 94, 0.3);
+    }
+
+    .btn-danger:hover {
+      background: rgba(244, 63, 94, 0.25);
+    }
+
+    .btn-sm {
+      padding: 4px 10px;
+      font-size: 12px;
+    }
+
+    /* Layout */
+    .console-layout {
+      display: flex;
+      flex: 1;
+    }
+
+    .sidebar {
+      width: 240px;
+      background: var(--bg-surface);
+      border-right: 1px solid var(--border-subtle);
+      padding: 24px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .nav-item {
+      padding: 10px 14px;
+      border-radius: var(--radius-sm);
+      color: var(--text-secondary);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      transition: all 0.15s;
+    }
+
+    .nav-item:hover {
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+    }
+
+    .nav-item.active {
+      background: rgba(59, 130, 246, 0.15);
+      color: var(--accent-blue);
+      font-weight: 600;
+    }
+
+    .main-content {
+      flex: 1;
+      padding: 32px 40px;
+      max-width: 1200px;
+    }
+
+    .view-section {
+      display: none;
+    }
+
+    .view-section.active {
+      display: block;
+    }
+
+    .page-header {
+      margin-bottom: 28px;
+    }
+
+    .page-title {
+      font-size: 24px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin-bottom: 6px;
+    }
+
+    .page-subtitle {
+      color: var(--text-secondary);
+      font-size: 14px;
+    }
+
+    /* Cards & Grids */
+    .grid-metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 20px;
+      margin-bottom: 32px;
+    }
+
+    .card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 20px;
+    }
+
+    .metric-card {
+      position: relative;
+    }
+
+    .metric-label {
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    .metric-value {
+      font-size: 28px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      letter-spacing: -0.02em;
+    }
+
+    .metric-sub {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+
+    /* Data Table */
+    .table-container {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      margin-top: 16px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 13px;
+    }
+
+    th {
+      background: var(--bg-elevated);
+      padding: 12px 18px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    td {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--text-primary);
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    .key-badge {
+      font-family: var(--font-mono);
+      background: var(--bg-elevated);
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    .status-pill {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+
+    .status-active {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--accent-emerald);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .status-revoked {
+      background: rgba(244, 63, 94, 0.15);
+      color: var(--accent-rose);
+      border: 1px solid rgba(244, 63, 94, 0.3);
+    }
+
+    /* Code Snippets */
+    .code-block {
+      background: #06090e;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 16px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: #e2e8f0;
+      position: relative;
+      overflow-x: auto;
+      margin: 12px 0 24px;
+    }
+
+    /* Modals */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+
+    .modal-overlay.active {
+      display: flex;
+    }
+
+    .modal-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      width: 100%;
+      max-width: 500px;
+      padding: 28px;
+      box-shadow: var(--shadow-lg);
+    }
+
+    .modal-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .modal-desc {
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-bottom: 20px;
+    }
+
+    .form-group {
+      margin-bottom: 18px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+    }
+
+    .form-input {
+      width: 100%;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      font-size: 14px;
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      outline: none;
+    }
+
+    .form-input:focus {
+      border-color: var(--border-focus);
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+      margin-top: 24px;
+    }
+
+    .reveal-box {
+      background: #06090e;
+      border: 1px solid var(--accent-amber);
+      border-radius: var(--radius-sm);
+      padding: 14px;
+      margin: 16px 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .raw-key-text {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: #fbbf24;
+      word-break: break-all;
+    }
+
+    .auth-container {
+      max-width: 440px;
+      margin: 80px auto;
+      padding: 32px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-lg);
+    }
+
+    .auth-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border-subtle);
+      margin-bottom: 24px;
+    }
+
+    .auth-tab {
+      flex: 1;
+      text-align: center;
+      padding: 12px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      cursor: pointer;
+    }
+
+    .auth-tab.active {
+      color: var(--accent-blue);
+      border-bottom: 2px solid var(--accent-blue);
+      font-weight: 600;
+    }
+
+    .alert {
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      margin-bottom: 16px;
+      display: none;
+    }
+
+    .alert-error {
+      background: rgba(244, 63, 94, 0.15);
+      color: var(--accent-rose);
+      border: 1px solid rgba(244, 63, 94, 0.3);
+    }
+
+    .alert-success {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--accent-emerald);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Bar -->
+  <header class="top-bar">
+    <div class="brand">
+      <div class="brand-icon">G</div>
+      <span class="brand-title">Geospatial Platform</span>
+      <span class="brand-badge">Developer Console</span>
+    </div>
+
+    <div class="nav-actions" id="headerNavActions" style="display: none;">
+      <select class="project-selector" id="projectSelectorDropdown" title="Active Project">
+        <!-- Injected dynamically -->
+      </select>
+      <div class="user-profile">
+        <span class="user-email" id="headerUserEmail">user@example.com</span>
+        <button class="btn btn-secondary btn-sm" id="logoutBtn">Sign Out</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Auth View (Shown when logged out) -->
+  <main id="authView" style="display: none;">
+    <div class="auth-container">
+      <div class="auth-tabs">
+        <div class="auth-tab active" id="tabLogin">Sign In</div>
+        <div class="auth-tab" id="tabRegister">Register</div>
+      </div>
+
+      <div class="alert alert-error" id="authErrorAlert"></div>
+      <div class="alert alert-success" id="authSuccessAlert"></div>
+
+      <!-- Login Form -->
+      <form id="loginForm">
+        <div class="form-group">
+          <label class="form-label" for="loginEmail">Email Address</label>
+          <input type="email" class="form-input" id="loginEmail" required placeholder="developer@example.com">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="loginPassword">Password</label>
+          <input type="password" class="form-input" id="loginPassword" required placeholder="••••••••">
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%;">Sign In</button>
+      </form>
+
+      <!-- Register Form -->
+      <form id="registerForm" style="display: none;">
+        <div class="form-group">
+          <label class="form-label" for="registerName">Full Name</label>
+          <input type="text" class="form-input" id="registerName" placeholder="Ada Lovelace">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="registerEmail">Email Address</label>
+          <input type="email" class="form-input" id="registerEmail" required placeholder="developer@example.com">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="registerPassword">Password (8+ chars)</label>
+          <input type="password" class="form-input" id="registerPassword" required minlength="8" placeholder="••••••••">
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%;">Create Developer Account</button>
+      </form>
+    </div>
+  </main>
+
+  <!-- Authenticated Console View -->
+  <div class="console-layout" id="consoleLayout" style="display: none;">
+    <aside class="sidebar">
+      <div class="nav-item active" data-view="overview">Dashboard</div>
+      <div class="nav-item" data-view="keys">API Keys</div>
+      <div class="nav-item" data-view="projects">Projects</div>
+      <div class="nav-item" data-view="usage">Usage & Quotas</div>
+      <div class="nav-item" data-view="docs">Quickstart Docs</div>
+    </aside>
+
+    <main class="main-content">
+      
+      <!-- Overview Section -->
+      <section class="view-section active" id="view-overview">
+        <div class="page-header">
+          <h1 class="page-title" id="overviewProjectTitle">Project Dashboard</h1>
+          <p class="page-subtitle">Production endpoints, active credentials, and API activity metrics.</p>
+        </div>
+
+        <div class="grid-metrics">
+          <div class="card metric-card">
+            <div class="metric-label">Total Requests</div>
+            <div class="metric-value" id="metricTotalReq">0</div>
+            <div class="metric-sub">All time activity</div>
+          </div>
+          <div class="card metric-card">
+            <div class="metric-label">Requests Today</div>
+            <div class="metric-value" id="metricTodayReq">0</div>
+            <div class="metric-sub" id="metricTodayQuota">of 1,000 daily limit</div>
+          </div>
+          <div class="card metric-card">
+            <div class="metric-label">Active API Keys</div>
+            <div class="metric-value" id="metricActiveKeys">0</div>
+            <div class="metric-sub">Configured in project</div>
+          </div>
+          <div class="card metric-card">
+            <div class="metric-label">Bytes Processed</div>
+            <div class="metric-value" id="metricBytes">0 KB</div>
+            <div class="metric-sub">Uploaded survey files</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 style="font-size: 16px; margin-bottom: 12px;">Protected API Endpoints</h3>
+          <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">
+            Include header <code style="color: var(--accent-blue); font-family: var(--font-mono);">X-API-Key: &lt;your_key&gt;</code> on all requests to version 1 routes.
+          </p>
+          <div class="code-block">
+POST /api/v1/files/              - Ingest and process Shapefile (.zip) or KML (.kml)
+GET  /api/v1/files/              - List survey files belonging to this project
+GET  /api/v1/files/{id}/         - Retrieve feature geometries and attributes
+GET  /api/v1/files/{id}/measurements/ - Retrieve calculated metric areas & lengths
+DELETE /api/v1/files/{id}/       - Securely delete file and its measurements
+          </div>
+        </div>
+      </section>
+
+      <!-- API Keys Section -->
+      <section class="view-section" id="view-keys">
+        <div class="page-header" style="display: flex; justify-content: space-between; align-items: flex-end;">
+          <div>
+            <h1 class="page-title">API Keys</h1>
+            <p class="page-subtitle">Create, monitor, and revoke credentials for your backend services.</p>
+          </div>
+          <button class="btn btn-primary" id="btnOpenCreateKeyModal">Generate API Key</button>
+        </div>
+
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Key Name</th>
+                <th>Prefix & Last 4</th>
+                <th>Created</th>
+                <th>Last Used</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="apiKeysTableBody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Projects Section -->
+      <section class="view-section" id="view-projects">
+        <div class="page-header" style="display: flex; justify-content: space-between; align-items: flex-end;">
+          <div>
+            <h1 class="page-title">Developer Projects</h1>
+            <p class="page-subtitle">Organize your geospatial applications and tenant isolation boundaries.</p>
+          </div>
+          <button class="btn btn-primary" id="btnOpenCreateProjectModal">New Project</button>
+        </div>
+
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Project Name</th>
+                <th>Project ID</th>
+                <th>Tier</th>
+                <th>Daily Limit</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody id="projectsTableBody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Usage Section -->
+      <section class="view-section" id="view-usage">
+        <div class="page-header">
+          <h1 class="page-title">Usage & Quotas</h1>
+          <p class="page-subtitle">Real-time accounting and daily request allocations for the active project.</p>
+        </div>
+
+        <div class="grid-metrics">
+          <div class="card metric-card">
+            <div class="metric-label">Daily Allocation</div>
+            <div class="metric-value" id="usageDailyVal">0 / 1000</div>
+            <div class="metric-sub" id="usageDailyPercent">0% consumed today</div>
+          </div>
+          <div class="card metric-card">
+            <div class="metric-label">Monthly Allocation</div>
+            <div class="metric-value" id="usageMonthlyVal">0 / 10000</div>
+            <div class="metric-sub" id="usageMonthlyPercent">0% consumed this month</div>
+          </div>
+          <div class="card metric-card">
+            <div class="metric-label">Successful Calls (2xx)</div>
+            <div class="metric-value" id="usageSuccessVal">0</div>
+            <div class="metric-sub">Calculations completed</div>
+          </div>
+          <div class="card metric-card">
+            <div class="metric-label">Failed Calls (4xx/5xx)</div>
+            <div class="metric-value" id="usageFailVal">0</div>
+            <div class="metric-sub">Rejected / throttled</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Docs Section -->
+      <section class="view-section" id="view-docs">
+        <div class="page-header">
+          <h1 class="page-title">Quickstart & SDK Integration</h1>
+          <p class="page-subtitle">Seamless integration examples in Python, JavaScript/Node.js, and cURL.</p>
+        </div>
+
+        <div class="card" style="margin-bottom: 24px;">
+          <h3 style="font-size: 15px; margin-bottom: 8px;">1. Python (requests)</h3>
+          <p style="font-size: 13px; color: var(--text-secondary);">Authenticate using standard environment variables.</p>
+          <div class="code-block">
+import os
+import requests
+
+API_KEY = os.environ.get("GFM_API_KEY")
+BASE_URL = "https://geospatial-measurement-api-9tqz.onrender.com"
+
+# Upload and calculate Shapefile ZIP
+with open("survey.zip", "rb") as f:
+    response = requests.post(
+        f"{BASE_URL}/api/v1/files/",
+        headers={"X-API-Key": API_KEY},
+        files={"file": ("survey.zip", f, "application/zip")}
+    )
+
+data = response.json()
+print("Uploaded File ID:", data["id"])
+print("Calculated Features:", data["feature_count"])
+          </div>
+        </div>
+
+        <div class="card" style="margin-bottom: 24px;">
+          <h3 style="font-size: 15px; margin-bottom: 8px;">2. JavaScript / Node.js (fetch)</h3>
+          <div class="code-block">
+const fs = require('fs');
+const FormData = require('form-data');
+
+const API_KEY = process.env.GFM_API_KEY;
+const BASE_URL = 'https://geospatial-measurement-api-9tqz.onrender.com';
+
+const form = new FormData();
+form.append('file', fs.createReadStream('parcels.kml'));
+
+fetch(`${BASE_URL}/api/v1/files/`, {
+  method: 'POST',
+  headers: {
+    'X-API-Key': API_KEY,
+    ...form.getHeaders()
+  },
+  body: form
+})
+.then(res => res.json())
+.then(data => console.log('File ID:', data.id));
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 style="font-size: 15px; margin-bottom: 8px;">3. cURL (Command Line)</h3>
+          <div class="code-block">
+curl -X POST "https://geospatial-measurement-api-9tqz.onrender.com/api/v1/files/" \
+  -H "X-API-Key: $GFM_API_KEY" \
+  -F "file=@survey_plots.zip"
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Create Key Modal -->
+  <div class="modal-overlay" id="createKeyModal">
+    <div class="modal-card">
+      <h3 class="modal-title">Generate API Key</h3>
+      <p class="modal-desc">Create a new key to authenticate requests from your application.</p>
+      <form id="createKeyForm">
+        <div class="form-group">
+          <label class="form-label" for="newKeyName">Key Description</label>
+          <input type="text" class="form-input" id="newKeyName" required placeholder="e.g. Production Ingestion Service">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="newKeyEnv">Environment</label>
+          <select class="form-input" id="newKeyEnv">
+            <option value="live">Live (Production: gfm_live_...)</option>
+            <option value="test">Test (Sandbox: gfm_test_...)</option>
+          </select>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="cancelKeyModalBtn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Generate Key</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- One-Time Reveal Modal -->
+  <div class="modal-overlay" id="revealKeyModal">
+    <div class="modal-card">
+      <h3 class="modal-title" style="color: var(--accent-amber);">API Key Generated Successfully</h3>
+      <p class="modal-desc">
+        Please copy your API key now. <strong>For security reasons, this key will never be shown again.</strong>
+      </p>
+      <div class="reveal-box">
+        <span class="raw-key-text" id="revealKeyText">gfm_live_...</span>
+        <button class="btn btn-secondary btn-sm" id="btnCopyKey">Copy</button>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" id="btnCloseRevealModal">I have saved my key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create Project Modal -->
+  <div class="modal-overlay" id="createProjectModal">
+    <div class="modal-card">
+      <h3 class="modal-title">Create New Project</h3>
+      <p class="modal-desc">Establish a dedicated tenant boundary for your geospatial calculations.</p>
+      <form id="createProjectForm">
+        <div class="form-group">
+          <label class="form-label" for="newProjectName">Project Name</label>
+          <input type="text" class="form-input" id="newProjectName" required placeholder="e.g. Urban Land Survey">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="newProjectDesc">Description (Optional)</label>
+          <input type="text" class="form-input" id="newProjectDesc" placeholder="e.g. Pipeline for cadastral mapping">
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="cancelProjectModalBtn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Project</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    // State management
+    let state = {
+      token: localStorage.getItem('gfm_session_token') || null,
+      user: null,
+      projects: [],
+      currentProjectId: null,
+      keys: [],
+      usage: null
+    };
+
+    // DOM Elements
+    const authView = document.getElementById('authView');
+    const consoleLayout = document.getElementById('consoleLayout');
+    const headerNavActions = document.getElementById('headerNavActions');
+    const headerUserEmail = document.getElementById('headerUserEmail');
+    const projectSelectorDropdown = document.getElementById('projectSelectorDropdown');
+    const logoutBtn = document.getElementById('logoutBtn');
+
+    // Modals
+    const createKeyModal = document.getElementById('createKeyModal');
+    const revealKeyModal = document.getElementById('revealKeyModal');
+    const createProjectModal = document.getElementById('createProjectModal');
+
+    // Navigation items
+    document.querySelectorAll('.sidebar .nav-item').forEach(item => {
+      item.addEventListener('click', () => {
+        document.querySelectorAll('.sidebar .nav-item').forEach(i => i.classList.remove('active'));
+        document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));
+        item.classList.add('active');
+        const viewId = 'view-' + item.getAttribute('data-view');
+        const targetSection = document.getElementById(viewId);
+        if (targetSection) targetSection.classList.add('active');
+      });
+    });
+
+    // Helper: Safe API fetch with credentials
+    async function apiRequest(endpoint, options = {}) {
+      const headers = options.headers || {};
+      if (state.token) {
+        headers['Authorization'] = 'Bearer ' + state.token;
+      }
+      headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+      options.headers = headers;
+      const res = await fetch(endpoint, options);
+      if (res.status === 401 && !endpoint.includes('/api/v1/auth/login')) {
+        handleLogout();
+        throw new Error('Session expired. Please sign in again.');
+      }
+      return res;
+    }
+
+    // Initialize application
+    async function init() {
+      if (!state.token) {
+        showAuthView();
+        return;
+      }
+
+      try {
+        const res = await apiRequest('/api/v1/auth/me');
+        if (res.ok) {
+          state.user = await res.json();
+          showConsoleView();
+          await loadProjects();
+        } else {
+          handleLogout();
+        }
+      } catch (e) {
+        handleLogout();
+      }
+    }
+
+    function showAuthView() {
+      authView.style.display = 'block';
+      consoleLayout.style.display = 'none';
+      headerNavActions.style.display = 'none';
+    }
+
+    function showConsoleView() {
+      authView.style.display = 'none';
+      consoleLayout.style.display = 'flex';
+      headerNavActions.style.display = 'flex';
+      headerUserEmail.textContent = state.user.email;
+    }
+
+    function handleLogout() {
+      state.token = null;
+      state.user = null;
+      localStorage.removeItem('gfm_session_token');
+      showAuthView();
+    }
+
+    logoutBtn.addEventListener('click', async () => {
+      try {
+        await apiRequest('/api/v1/auth/logout', { method: 'POST' });
+      } catch (e) {}
+      handleLogout();
+    });
+
+    // Auth Form Toggling
+    const tabLogin = document.getElementById('tabLogin');
+    const tabRegister = document.getElementById('tabRegister');
+    const loginForm = document.getElementById('loginForm');
+    const registerForm = document.getElementById('registerForm');
+    const authErrorAlert = document.getElementById('authErrorAlert');
+    const authSuccessAlert = document.getElementById('authSuccessAlert');
+
+    tabLogin.addEventListener('click', () => {
+      tabLogin.classList.add('active');
+      tabRegister.classList.remove('active');
+      loginForm.style.display = 'block';
+      registerForm.style.display = 'none';
+      authErrorAlert.style.display = 'none';
+    });
+
+    tabRegister.addEventListener('click', () => {
+      tabRegister.classList.add('active');
+      tabLogin.classList.remove('active');
+      loginForm.style.display = 'none';
+      registerForm.style.display = 'block';
+      authErrorAlert.style.display = 'none';
+    });
+
+    // Handle Login
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      authErrorAlert.style.display = 'none';
+      const email = document.getElementById('loginEmail').value;
+      const password = document.getElementById('loginPassword').value;
+
+      try {
+        const res = await fetch('/api/v1/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          state.token = data.access_token;
+          state.user = data.user;
+          localStorage.setItem('gfm_session_token', state.token);
+          showConsoleView();
+          await loadProjects();
+        } else {
+          authErrorAlert.textContent = data.detail || 'Invalid email or password.';
+          authErrorAlert.style.display = 'block';
+        }
+      } catch (err) {
+        authErrorAlert.textContent = 'Connection error. Please try again.';
+        authErrorAlert.style.display = 'block';
+      }
+    });
+
+    // Handle Register
+    registerForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      authErrorAlert.style.display = 'none';
+      const full_name = document.getElementById('registerName').value;
+      const email = document.getElementById('registerEmail').value;
+      const password = document.getElementById('registerPassword').value;
+
+      try {
+        const res = await fetch('/api/v1/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ full_name, email, password })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          state.token = data.access_token;
+          state.user = data.user;
+          localStorage.setItem('gfm_session_token', state.token);
+          showConsoleView();
+          await loadProjects();
+        } else {
+          authErrorAlert.textContent = data.detail || 'Registration failed.';
+          authErrorAlert.style.display = 'block';
+        }
+      } catch (err) {
+        authErrorAlert.textContent = 'Connection error. Please try again.';
+        authErrorAlert.style.display = 'block';
+      }
+    });
+
+    // Load Projects
+    async function loadProjects() {
+      const res = await apiRequest('/api/v1/projects/');
+      if (res.ok) {
+        const data = await res.json();
+        state.projects = data.projects || [];
+        renderProjectSelector();
+        renderProjectsTable();
+        if (state.projects.length > 0) {
+          state.currentProjectId = state.projects[0].id;
+          projectSelectorDropdown.value = state.currentProjectId;
+          await onProjectChanged();
+        }
+      }
+    }
+
+    function renderProjectSelector() {
+      projectSelectorDropdown.textContent = '';
+      state.projects.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = p.name;
+        projectSelectorDropdown.appendChild(opt);
+      });
+    }
+
+    function renderProjectsTable() {
+      const tbody = document.getElementById('projectsTableBody');
+      tbody.textContent = '';
+      state.projects.forEach(p => {
+        const tr = document.createElement('tr');
+        
+        const tdName = document.createElement('td');
+        tdName.textContent = p.name;
+        tr.appendChild(tdName);
+
+        const tdId = document.createElement('td');
+        const codeId = document.createElement('span');
+        codeId.className = 'key-badge';
+        codeId.textContent = p.id;
+        tdId.appendChild(codeId);
+        tr.appendChild(tdId);
+
+        const tdTier = document.createElement('td');
+        tdTier.textContent = p.tier.toUpperCase();
+        tr.appendChild(tdTier);
+
+        const tdLimit = document.createElement('td');
+        tdLimit.textContent = p.daily_request_limit.toLocaleString() + ' req/day';
+        tr.appendChild(tdLimit);
+
+        const tdDate = document.createElement('td');
+        tdDate.textContent = new Date(p.created_at).toLocaleDateString();
+        tr.appendChild(tdDate);
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    projectSelectorDropdown.addEventListener('change', async (e) => {
+      state.currentProjectId = e.target.value;
+      await onProjectChanged();
+    });
+
+    async function onProjectChanged() {
+      const currentProject = state.projects.find(p => p.id === state.currentProjectId);
+      if (currentProject) {
+        document.getElementById('overviewProjectTitle').textContent = currentProject.name + ' Dashboard';
+      }
+      await Promise.all([loadApiKeys(), loadUsage()]);
+    }
+
+    // Load API Keys
+    async function loadApiKeys() {
+      if (!state.currentProjectId) return;
+      const res = await apiRequest(`/api/v1/projects/${state.currentProjectId}/api-keys/`);
+      if (res.ok) {
+        const data = await res.json();
+        state.keys = data.keys || [];
+        renderApiKeysTable();
+        document.getElementById('metricActiveKeys').textContent = state.keys.filter(k => !k.is_revoked).length;
+      }
+    }
+
+    function renderApiKeysTable() {
+      const tbody = document.getElementById('apiKeysTableBody');
+      tbody.textContent = '';
+
+      if (state.keys.length === 0) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 6;
+        td.style.textAlign = 'center';
+        td.style.color = 'var(--text-muted)';
+        td.textContent = 'No API keys generated yet. Click "Generate API Key" to begin.';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+      }
+
+      state.keys.forEach(k => {
+        const tr = document.createElement('tr');
+
+        const tdName = document.createElement('td');
+        tdName.textContent = k.name;
+        tr.appendChild(tdName);
+
+        const tdBadge = document.createElement('td');
+        const badge = document.createElement('span');
+        badge.className = 'key-badge';
+        badge.textContent = `${k.key_prefix}••••${k.last_four}`;
+        tdBadge.appendChild(badge);
+        tr.appendChild(tdBadge);
+
+        const tdCreated = document.createElement('td');
+        tdCreated.textContent = new Date(k.created_at).toLocaleDateString();
+        tr.appendChild(tdCreated);
+
+        const tdLastUsed = document.createElement('td');
+        tdLastUsed.textContent = k.last_used_at ? new Date(k.last_used_at).toLocaleDateString() : 'Never';
+        tr.appendChild(tdLastUsed);
+
+        const tdStatus = document.createElement('td');
+        const pill = document.createElement('span');
+        pill.className = 'status-pill ' + (k.is_revoked ? 'status-revoked' : 'status-active');
+        pill.textContent = k.is_revoked ? 'REVOKED' : 'ACTIVE';
+        tdStatus.appendChild(pill);
+        tr.appendChild(tdStatus);
+
+        const tdActions = document.createElement('td');
+        if (!k.is_revoked) {
+          const btnRevoke = document.createElement('button');
+          btnRevoke.className = 'btn btn-danger btn-sm';
+          btnRevoke.textContent = 'Revoke';
+          btnRevoke.addEventListener('click', () => revokeKey(k.id));
+          tdActions.appendChild(btnRevoke);
+        } else {
+          tdActions.textContent = '—';
+        }
+        tr.appendChild(tdActions);
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function revokeKey(keyId) {
+      if (!confirm('Are you sure you want to revoke this API key? Applications using this key will immediately be rejected.')) {
+        return;
+      }
+      const res = await apiRequest(`/api/v1/projects/${state.currentProjectId}/api-keys/${keyId}/revoke`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        await loadApiKeys();
+      }
+    }
+
+    // Load Usage
+    async function loadUsage() {
+      if (!state.currentProjectId) return;
+      const res = await apiRequest(`/api/v1/projects/${state.currentProjectId}/usage`);
+      if (res.ok) {
+        state.usage = await res.json();
+        renderUsageStats();
+      }
+    }
+
+    function renderUsageStats() {
+      const u = state.usage;
+      if (!u) return;
+
+      document.getElementById('metricTotalReq').textContent = u.total_requests.toLocaleString();
+      document.getElementById('metricTodayReq').textContent = u.requests_today.toLocaleString();
+      document.getElementById('metricTodayQuota').textContent = `of ${u.daily_limit.toLocaleString()} daily limit`;
+
+      const kb = (u.bytes_uploaded / 1024).toFixed(1);
+      document.getElementById('metricBytes').textContent = `${kb} KB`;
+
+      document.getElementById('usageDailyVal').textContent = `${u.requests_today} / ${u.daily_limit}`;
+      const dailyPct = Math.min(100, Math.round((u.requests_today / u.daily_limit) * 100));
+      document.getElementById('usageDailyPercent').textContent = `${dailyPct}% consumed today`;
+
+      document.getElementById('usageMonthlyVal').textContent = `${u.requests_this_month} / ${u.monthly_limit}`;
+      const monPct = Math.min(100, Math.round((u.requests_this_month / u.monthly_limit) * 100));
+      document.getElementById('usageMonthlyPercent').textContent = `${monPct}% consumed this month`;
+
+      document.getElementById('usageSuccessVal').textContent = u.successful_requests.toLocaleString();
+      document.getElementById('usageFailVal').textContent = u.failed_requests.toLocaleString();
+    }
+
+    // Modal Handlers
+    document.getElementById('btnOpenCreateKeyModal').addEventListener('click', () => {
+      createKeyModal.classList.add('active');
+    });
+    document.getElementById('cancelKeyModalBtn').addEventListener('click', () => {
+      createKeyModal.classList.remove('active');
+    });
+
+    document.getElementById('createKeyForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = document.getElementById('newKeyName').value;
+      const environment = document.getElementById('newKeyEnv').value;
+
+      const res = await apiRequest(`/api/v1/projects/${state.currentProjectId}/api-keys/`, {
+        method: 'POST',
+        body: JSON.stringify({ name, environment })
+      });
+
+      if (res.ok) {
+        const createdKey = await res.json();
+        createKeyModal.classList.remove('active');
+        document.getElementById('createKeyForm').reset();
+        
+        // Show One-Time Reveal Modal
+        document.getElementById('revealKeyText').textContent = createdKey.key;
+        revealKeyModal.classList.add('active');
+        await loadApiKeys();
+      }
+    });
+
+    document.getElementById('btnCopyKey').addEventListener('click', () => {
+      const text = document.getElementById('revealKeyText').textContent;
+      navigator.clipboard.writeText(text);
+      document.getElementById('btnCopyKey').textContent = 'Copied!';
+      setTimeout(() => {
+        document.getElementById('btnCopyKey').textContent = 'Copy';
+      }, 2000);
+    });
+
+    document.getElementById('btnCloseRevealModal').addEventListener('click', () => {
+      revealKeyModal.classList.remove('active');
+      document.getElementById('revealKeyText').textContent = '••••••••••••••••••••••••';
+    });
+
+    // Create Project
+    document.getElementById('btnOpenCreateProjectModal').addEventListener('click', () => {
+      createProjectModal.classList.add('active');
+    });
+    document.getElementById('cancelProjectModalBtn').addEventListener('click', () => {
+      createProjectModal.classList.remove('active');
+    });
+
+    document.getElementById('createProjectForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = document.getElementById('newProjectName').value;
+      const description = document.getElementById('newProjectDesc').value;
+
+      const res = await apiRequest('/api/v1/projects/', {
+        method: 'POST',
+        body: JSON.stringify({ name, description })
+      });
+
+      if (res.ok) {
+        createProjectModal.classList.remove('active');
+        document.getElementById('createProjectForm').reset();
+        await loadProjects();
+      }
+    });
+
+    // Start
+    init();
+  </script>
+</body>
+</html>

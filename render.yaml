@@ -1,3 +1,9 @@
+databases:
+  - name: geospatial-db
+    databaseName: geospatial
+    user: geospatial_user
+    plan: free
+
 services:
   - type: web
     name: geospatial-measurement-api
@@ -9,6 +15,10 @@ services:
         value: 0.0.0.0
       - key: PORT
         value: 8000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: geospatial-db
+          property: connectionString
       - key: MAX_UPLOAD_SIZE_BYTES
         value: 26214400
       - key: MAX_DECOMPRESSED_SIZE_BYTES
@@ -17,3 +27,5 @@ services:
         value: 100.0
       - key: CORS_ORIGINS
         value: "*"
+      - key: API_KEY_PEPPER
+        generateValue: true
