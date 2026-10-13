@@ -258,8 +258,11 @@ key_data = r_key_create.json()
 alice_raw_key = key_data.get("key")
 assert alice_raw_key is not None, "Raw key must be revealed on creation"
 assert alice_raw_key.startswith("gfm_live_"), f"Raw key must have 'gfm_live_' prefix: {alice_raw_key}"
+entropy_hex = alice_raw_key.replace("gfm_live_", "")
+assert len(entropy_hex) == 64, f"API key entropy must be 64 hex characters (256 bits), got {len(entropy_hex)}"
+int(entropy_hex, 16)  # Asserts valid hex string
 alice_key_id = key_data["id"]
-print("[PASS] 4.1 API key generated with 'gfm_live_' prefix and one-time raw key reveal")
+print("[PASS] 4.1 API key generated with 256-bit CSPRNG entropy, 'gfm_live_' prefix, and one-time reveal")
 
 # 4.2 Database stores peppered hash, never raw plaintext key
 with next(get_db()) as db:

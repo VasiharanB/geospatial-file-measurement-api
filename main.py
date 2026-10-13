@@ -202,11 +202,11 @@ def hash_api_key(raw_key: str) -> str:
 
 def generate_api_key(environment: str = "live") -> Tuple[str, str, str, str]:
     """
-    Generate cryptographically secure API key.
+    Generate cryptographically secure API key with 256 bits of CSPRNG entropy.
     Returns: (raw_key, prefix, last_four, key_hash)
     """
     prefix = "gfm_live_" if environment == "live" else "gfm_test_"
-    entropy = secrets.token_hex(16)
+    entropy = secrets.token_hex(32)  # 32 bytes = 256 bits of CSPRNG entropy (64 hex characters)
     raw_key = f"{prefix}{entropy}"
     last_four = raw_key[-4:]
     key_hash = hash_api_key(raw_key)

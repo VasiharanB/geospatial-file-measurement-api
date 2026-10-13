@@ -29,3 +29,5 @@ services:
         value: "*"
       - key: API_KEY_PEPPER
         generateValue: true
+      - key: AUTH_SECRET_KEY
+        generateValue: true
