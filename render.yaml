@@ -31,3 +31,5 @@ services:
         generateValue: true
       - key: AUTH_SECRET_KEY
         generateValue: true
+      - key: ENVIRONMENT
+        value: production

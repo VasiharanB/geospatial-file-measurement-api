@@ -264,12 +264,61 @@ int(entropy_hex, 16)  # Asserts valid hex string
 alice_key_id = key_data["id"]
 print("[PASS] 4.1 API key generated with 256-bit CSPRNG entropy, 'gfm_live_' prefix, and one-time reveal")
 
-# 4.2 Database stores peppered hash, never raw plaintext key
+# 4.2 Database stores peppered hash; production secret validation invariants enforced
 with next(get_db()) as db:
     stored_key = db.execute(select(APIKeyRecord).where(APIKeyRecord.id == alice_key_id)).scalar_one()
     assert stored_key.key_hash != alice_raw_key, "Raw key must NEVER be stored in plaintext"
     assert len(stored_key.key_hash) == 64, "Hashed key must be 64-character SHA-256 digest"
-print("[PASS] 4.2 Database verified: stores SHA-256 peppered hash, never plaintext key")
+
+# 4.2.1 Automated tests for missing and default production secrets
+from main import validate_production_secrets, DEV_DEFAULT_PEPPER, DEV_DEFAULT_AUTH_SECRET
+
+# A. Reject missing or default API_KEY_PEPPER in production
+try:
+    validate_production_secrets(None, "secure_prod_auth_secret_32char_min!", is_prod=True)
+    assert False, "Should have raised RuntimeError for missing pepper in production"
+except RuntimeError as exc:
+    assert "API_KEY_PEPPER is missing or using an insecure development default" in str(exc)
+
+try:
+    validate_production_secrets(DEV_DEFAULT_PEPPER, "secure_prod_auth_secret_32char_min!", is_prod=True)
+    assert False, "Should have raised RuntimeError for default pepper in production"
+except RuntimeError as exc:
+    assert "API_KEY_PEPPER is missing or using an insecure development default" in str(exc)
+
+# B. Reject missing or default AUTH_SECRET_KEY in production
+try:
+    validate_production_secrets("secure_prod_pepper_32char_minimum!!", None, is_prod=True)
+    assert False, "Should have raised RuntimeError for missing auth secret in production"
+except RuntimeError as exc:
+    assert "AUTH_SECRET_KEY is missing or using an insecure development default" in str(exc)
+
+try:
+    validate_production_secrets("secure_prod_pepper_32char_minimum!!", DEV_DEFAULT_AUTH_SECRET, is_prod=True)
+    assert False, "Should have raised RuntimeError for default auth secret in production"
+except RuntimeError as exc:
+    assert "AUTH_SECRET_KEY is missing or using an insecure development default" in str(exc)
+
+# C. Reject short secrets (< 32 chars) in production
+try:
+    validate_production_secrets("short_pepper", "secure_prod_auth_secret_32char_min!", is_prod=True)
+    assert False, "Should have raised RuntimeError for short pepper in production"
+except RuntimeError as exc:
+    assert "must be at least 32 characters" in str(exc)
+
+try:
+    validate_production_secrets("secure_prod_pepper_32char_minimum!!", "short_auth_secret", is_prod=True)
+    assert False, "Should have raised RuntimeError for short auth secret in production"
+except RuntimeError as exc:
+    assert "must be at least 32 characters" in str(exc)
+
+# D. Accept valid secrets in production
+validate_production_secrets("secure_prod_pepper_32char_minimum!!", "secure_prod_auth_secret_32char_min!", is_prod=True)
+
+# E. Permit development defaults in local SQLite mode (is_prod=False)
+validate_production_secrets(DEV_DEFAULT_PEPPER, DEV_DEFAULT_AUTH_SECRET, is_prod=False)
+
+print("[PASS] 4.2 Database verified: stores SHA-256 peppered hash; production secrets strictly validated")
 
 # 4.3 List API keys returns safe metadata without raw secret
 r_key_list = client.get(f"/api/v1/projects/{alice_proj_id}/api-keys/", headers=alice_headers)

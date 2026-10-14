@@ -131,9 +131,75 @@ elif DATABASE_URL.startswith("postgresql://") and not DATABASE_URL.startswith("p
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Developer Platform & Authentication Secrets
-API_KEY_PEPPER = os.environ.get("API_KEY_PEPPER", "gfm_dev_pepper_default_secret_32char_minimum")
-AUTH_SECRET_KEY = os.environ.get("AUTH_SECRET_KEY", "gfm_session_secret_default_32char_minimum")
+DEV_DEFAULT_PEPPER = "gfm_dev_pepper_default_secret_32char_minimum"
+DEV_DEFAULT_AUTH_SECRET = "gfm_session_secret_default_32char_minimum"
+KNOWN_DEV_DEFAULTS = {DEV_DEFAULT_PEPPER, DEV_DEFAULT_AUTH_SECRET}
+
+
+def is_production_environment() -> bool:
+    """Determine whether the application is running in a production environment."""
+    env = os.environ.get("ENVIRONMENT", "").strip().lower()
+    if env in ("production", "prod"):
+        return True
+    if os.environ.get("RENDER", "").strip().lower() in ("true", "1"):
+        return True
+    db_url = os.environ.get("DATABASE_URL", "")
+    if db_url and not db_url.startswith("sqlite"):
+        return True
+    return False
+
+
+def validate_production_secrets(
+    api_key_pepper: Optional[str],
+    auth_secret_key: Optional[str],
+    is_prod: bool,
+) -> None:
+    """
+    Validate that cryptographic secrets meet security invariants.
+    In production:
+    - Secrets must not be None or empty.
+    - Secrets must not match known development default fallbacks.
+    - Secrets must be at least 32 characters in length.
+    In local development (SQLite):
+    - Defaults are permitted with a warning log to preserve zero-config local DX.
+    """
+    if is_prod:
+        if not api_key_pepper or not api_key_pepper.strip() or api_key_pepper.strip() in KNOWN_DEV_DEFAULTS:
+            raise RuntimeError(
+                "CRITICAL SECURITY CONFIGURATION ERROR: API_KEY_PEPPER is missing or using "
+                "an insecure development default in production environment. A unique, random secret "
+                "must be configured."
+            )
+        if len(api_key_pepper.strip()) < 32:
+            raise RuntimeError(
+                f"CRITICAL SECURITY CONFIGURATION ERROR: API_KEY_PEPPER must be at least 32 characters, "
+                f"got {len(api_key_pepper.strip())} characters."
+            )
+
+        if not auth_secret_key or not auth_secret_key.strip() or auth_secret_key.strip() in KNOWN_DEV_DEFAULTS:
+            raise RuntimeError(
+                "CRITICAL SECURITY CONFIGURATION ERROR: AUTH_SECRET_KEY is missing or using "
+                "an insecure development default in production environment. A unique, random secret "
+                "must be configured."
+            )
+        if len(auth_secret_key.strip()) < 32:
+            raise RuntimeError(
+                f"CRITICAL SECURITY CONFIGURATION ERROR: AUTH_SECRET_KEY must be at least 32 characters, "
+                f"got {len(auth_secret_key.strip())} characters."
+            )
+    else:
+        if not api_key_pepper or api_key_pepper in KNOWN_DEV_DEFAULTS:
+            logger.warning("Running with default API_KEY_PEPPER (development mode only).")
+        if not auth_secret_key or auth_secret_key in KNOWN_DEV_DEFAULTS:
+            logger.warning("Running with default AUTH_SECRET_KEY (development mode only).")
+
+
+API_KEY_PEPPER = os.environ.get("API_KEY_PEPPER", DEV_DEFAULT_PEPPER)
+AUTH_SECRET_KEY = os.environ.get("AUTH_SECRET_KEY", DEV_DEFAULT_AUTH_SECRET)
 AUTH_TOKEN_EXPIRE_DAYS = int(os.environ.get("AUTH_TOKEN_EXPIRE_DAYS", "7"))
+
+# Validate secrets against environment invariants
+validate_production_secrets(API_KEY_PEPPER, AUTH_SECRET_KEY, is_production_environment())
 
 
 # ==============================================================================
