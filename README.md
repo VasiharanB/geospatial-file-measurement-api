@@ -695,40 +695,67 @@ Clean, non-malicious sample datasets are provided in the [`sample_data/`](sample
 
 ## Verification & Test Suites
 
-The codebase includes an automated test harness covering all functional and security scenarios across Parts 2 through 9A.
+The codebase includes an automated master regression test harness covering all functional, architectural, security, and developer platform scenarios across 10 verification test suites.
 
-### Test Coverage Breakdown
+### Automated Master Test Suite Breakdown
 
-| Test Suite | File | Verified Scenarios | Status |
-| :--- | :--- | :---: | :---: |
-| **Part 2** | `tests/verify_part2.py` | 23 | **PASS (23/23)** |
-| **Part 3** | `tests/test_part3.py` | 16 | **PASS (16/16)** |
-| **Part 4** | `tests/test_part4.py` | 20 | **PASS (20/20)** |
-| **Part 5** | `tests/test_part5.py` | 15 | **PASS (15/15)** |
-| **Part 6** | `tests/test_part6.py` | 11 | **PASS (11/11)** |
-| **Part 7** | `tests/test_part7.py` | 15 | **PASS (15/15)** |
-| **Part 8** | `tests/test_part8.py` | 16 | **PASS (16/16)** |
-| **Part 9A** | `tests/test_part9a.py` | 20 | **PASS (20/20)** |
-| **Browser UI** | Real Edge/Chromium Suite | 25 | **PASS (25/25)** |
-| **Total Cumulative** | **All Verification Suites** | **161** | **PASS (161/161)** |
+| Test Suite | File | Verified Scenarios | Status | Scope & Coverage |
+| :--- | :--- | :---: | :---: | :--- |
+| **Part 2: File Ingestion & Security Validation** | `tests/verify_part2.py` | 23 | **PASS (23/23)** | Multi-part upload, magic byte verification, Zip-Slip path traversal defense, file limits |
+| **Part 3: CRS Detection & UTM Resolution Engine** | `tests/test_part3.py` | 16 | **PASS (16/16)** | Strict non-guessing CRS policy, automated UTM zone calculation, fallback projections |
+| **Part 4: Planar Metric Engine & Geodesic Benchmarks** | `tests/test_part4.py` | 20 | **PASS (20/20)** | Shoelace planar area, Euclidean length, AEQD geodesic path benchmarks, millimetric precision |
+| **Part 5: Relational Persistence & SQLAlchemy 2.0 Models** | `tests/test_part5.py` | 15 | **PASS (15/15)** | SQLite WAL mode, foreign keys, CASCADE rules, UUID primary keys, transactional rollbacks |
+| **Part 6: API Serialization & REST Contract Enforcement** | `tests/test_part6.py` | 11 | **PASS (11/11)** | FastAPI serialization, Pydantic schemas, ISO 8601 timestamps, numeric bounds |
+| **Part 7: Database Layer & Architecture Hardening** | `tests/test_part7.py` | 15 | **PASS (15/15)** | Concurrency safety, connection pooling, defensive query parameterization |
+| **Part 8: Production Quality & Deployment Readiness** | `tests/test_part8.py` | 16 | **PASS (16/16)** | Health checks, OpenAPI schemas, generic 500 masking, container/environment configuration |
+| **Part 9A: Functional UI Validation & End-to-End Integration** | `tests/test_part9a.py` | 20 | **PASS (20/20)** | Live HTTP endpoint integration, DOM structure, error badges, client-side guards |
+| **Part 10: Defensive Security Audit & Hardening** | `tests/test_security_audit.py` | 11 | **PASS (11/11)** | Security headers, SSRF scheme blocking, rate limiting, exception masking |
+| **Part 12: Developer Platform & Tenant Isolation** | `tests/test_developer_platform.py` | 35 | **PASS (35/35)** | Argon2id auth, SHA-256 API keys, multi-tenant IDOR isolation, quota enforcement |
+| **Total Automated Regression Suite** | **All 10 Verification Suites** | **182** | **PASS (182/182)** | **Complete automated regression test harness** |
 
-### Running the Test Suites
+### Automated Testing vs. Manual Browser Checklist Validation
 
-Execute the master test runner to verify all 8 test suites in sequence:
+- **Automated Regression Suite (182 Scenarios):** 182 fully automated Python test scenarios executed across the 10 test suites above via `python tests/run_all_tests.py` and GitHub Actions CI.
+- **Manual Browser UI Verification Checklist (Historical 25 Checks):** Separate manual cross-browser usability checks (e.g., visual Earth rendering, responsive table scrollbars, drag-and-drop feedback in Chromium/Edge). An earlier development summary reported a total of 161 checks by adding 136 early-phase automated tests and 25 manual browser UI checks ($136 + 25 = 161$). That legacy tally has been superseded: the current automated Python master test harness authoritatively validates **182 scenarios** with 100% automated pass.
+
+### Continuous Integration (CI) Pipeline
+
+Automated regression testing is executed on every `push` and `pull_request` to `main` via **GitHub Actions CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+- **Environment:** Ubuntu Latest, Python 3.11, with GDAL, GEOS, and PROJ dependencies.
+- **Execution:** Spawns the FastAPI application and executes `python tests/run_all_tests.py` sequentially across all 182 scenarios.
+- **Scope Note:** This workflow operates strictly as Continuous Integration (CI) for automated verification and quality assurance. It does not perform automated deployment (CD).
+
+### Running the Test Suites Locally
+
+To execute the master regression test suite locally:
+
+1. Ensure dependencies are installed:
+   ```bash
+   pip install -r requirements.txt httpx pytest
+   ```
+
+2. Start the FastAPI backend server (required for Part 9A live integration scenarios):
+   ```bash
+   uvicorn main:app --host 127.0.0.1 --port 8000
+   ```
+
+3. In a separate terminal, execute the master test runner:
+   ```bash
+   python tests/run_all_tests.py
+   ```
+
+To run individual test suites independently:
 ```bash
-python tests/run_all_tests.py
-```
-
-To run individual test suites:
-```bash
-python tests/verify_part2.py    # Part 2 Ingestion & Security
-python tests/test_part3.py      # Part 3 CRS & UTM Engine
-python tests/test_part4.py      # Part 4 Planar Metrics & Geodesic Benchmarks
-python tests/test_part5.py      # Part 5 Relational Persistence & SQLAlchemy
-python tests/test_part6.py      # Part 6 API Serialization Contracts
-python tests/test_part7.py      # Part 7 Architecture Hardening
-python tests/test_part8.py      # Part 8 Production Deployment Quality
-python tests/test_part9a.py     # Part 9A Functional UI & Integration
+python tests/verify_part2.py            # Part 2 Ingestion & Security (23 scenarios)
+python tests/test_part3.py              # Part 3 CRS & UTM Engine (16 scenarios)
+python tests/test_part4.py              # Part 4 Planar Metrics & Geodesic Benchmarks (20 scenarios)
+python tests/test_part5.py              # Part 5 Relational Persistence & SQLAlchemy (15 scenarios)
+python tests/test_part6.py              # Part 6 API Serialization Contracts (11 scenarios)
+python tests/test_part7.py              # Part 7 Architecture Hardening (15 scenarios)
+python tests/test_part8.py              # Part 8 Production Deployment Quality (16 scenarios)
+python tests/test_part9a.py             # Part 9A Functional UI Validation (20 scenarios - requires live backend)
+python tests/test_security_audit.py      # Part 10 Defensive Security Audit (11 scenarios)
+python tests/test_developer_platform.py  # Part 12 Developer Platform & Tenant Isolation (35 scenarios)
 ```
 
 ---
