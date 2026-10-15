@@ -131,8 +131,8 @@ elif DATABASE_URL.startswith("postgresql://") and not DATABASE_URL.startswith("p
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Developer Platform & Authentication Secrets
-DEV_DEFAULT_PEPPER = "gfm_dev_pepper_default_secret_32char_minimum"
-DEV_DEFAULT_AUTH_SECRET = "gfm_session_secret_default_32char_minimum"
+DEV_DEFAULT_PEPPER = "gfm_dev_pepper_default_secret_32char_minimum"  # nosec B105
+DEV_DEFAULT_AUTH_SECRET = "gfm_session_secret_default_32char_minimum"  # nosec B105
 KNOWN_DEV_DEFAULTS = {DEV_DEFAULT_PEPPER, DEV_DEFAULT_AUTH_SECRET}
 
 

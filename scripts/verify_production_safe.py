@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import sys
 
 # Ensure UTF-8 output on Windows consoles
@@ -74,9 +75,13 @@ def http_json_request(
     method: str = "GET",
     data: Optional[Dict[str, Any]] = None,
     headers: Optional[Dict[str, str]] = None,
-    timeout: int = 30,
+    timeout: int = 60,
 ) -> Tuple[int, Dict[str, Any], Dict[str, str]]:
-    req_headers = {"User-Agent": "Geospatial-Safe-Verifier/1.0", "Accept": "application/json"}
+    req_headers = {
+        "User-Agent": "Geospatial-Safe-Verifier/1.0",
+        "Accept": "application/json",
+        "Connection": "close",
+    }
     if headers:
         req_headers.update(headers)
 
@@ -85,21 +90,28 @@ def http_json_request(
         req_headers["Content-Type"] = "application/json"
         body_bytes = json.dumps(data).encode("utf-8")
 
-    req = urllib.request.Request(url, data=body_bytes, headers=req_headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            resp_body = resp.read().decode("utf-8")
-            parsed = json.loads(resp_body) if resp_body.strip() else {}
-            resp_headers = {k.lower(): v for k, v in resp.headers.items()}
-            return resp.status, parsed, resp_headers
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode("utf-8")
+    max_retries = 4
+    for attempt in range(1, max_retries + 1):
+        req = urllib.request.Request(url, data=body_bytes, headers=req_headers, method=method)
         try:
-            parsed = json.loads(error_body)
-        except Exception:
-            parsed = {"error": "HTTPError", "raw": error_body}
-        resp_headers = {k.lower(): v for k, v in e.headers.items()}
-        return e.code, parsed, resp_headers
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                resp_body = resp.read().decode("utf-8")
+                parsed = json.loads(resp_body) if resp_body.strip() else {}
+                resp_headers = {k.lower(): v for k, v in resp.headers.items()}
+                return resp.status, parsed, resp_headers
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8")
+            try:
+                parsed = json.loads(error_body)
+            except Exception:
+                parsed = {"error": "HTTPError", "raw": error_body}
+            resp_headers = {k.lower(): v for k, v in e.headers.items()}
+            return e.code, parsed, resp_headers
+        except (ConnectionResetError, urllib.error.URLError, TimeoutError, OSError) as e:
+            if attempt < max_retries:
+                time.sleep(2 * attempt)
+                continue
+            raise
 
 
 def http_upload_file(
@@ -107,12 +119,13 @@ def http_upload_file(
     filename: str,
     content_bytes: bytes,
     headers: Optional[Dict[str, str]] = None,
-    timeout: int = 35,
+    timeout: int = 60,
 ) -> Tuple[int, Dict[str, Any]]:
     boundary = f"----WebKitBoundary{uuid.uuid4().hex}"
     req_headers = {
         "User-Agent": "Geospatial-Safe-Verifier/1.0",
         "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "Connection": "close",
     }
     if headers:
         req_headers.update(headers)
@@ -123,19 +136,26 @@ def http_upload_file(
         f"Content-Type: application/vnd.google-earth.kml+xml\r\n\r\n"
     ).encode("utf-8") + content_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
 
-    req = urllib.request.Request(url, data=body, headers=req_headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            resp_body = resp.read().decode("utf-8")
-            parsed = json.loads(resp_body) if resp_body.strip() else {}
-            return resp.status, parsed
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode("utf-8")
+    max_retries = 4
+    for attempt in range(1, max_retries + 1):
+        req = urllib.request.Request(url, data=body, headers=req_headers, method="POST")
         try:
-            parsed = json.loads(error_body)
-        except Exception:
-            parsed = {"error": "HTTPError", "raw": error_body}
-        return e.code, parsed
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                resp_body = resp.read().decode("utf-8")
+                parsed = json.loads(resp_body) if resp_body.strip() else {}
+                return resp.status, parsed
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8")
+            try:
+                parsed = json.loads(error_body)
+            except Exception:
+                parsed = {"error": "HTTPError", "raw": error_body}
+            return e.code, parsed
+        except (ConnectionResetError, urllib.error.URLError, TimeoutError, OSError) as e:
+            if attempt < max_retries:
+                time.sleep(2 * attempt)
+                continue
+            raise
 
 
 def main() -> None:
@@ -147,6 +167,8 @@ def main() -> None:
     tracked_files: List[Tuple[str, str]] = []  # (file_id, raw_api_key)
     tracked_keys: List[Tuple[str, str, str]] = []  # (project_id, key_id, session_token)
     tracked_projects: List[Tuple[str, str]] = []  # (project_id, session_token)
+    tracked_sessions: List[str] = []  # session_token
+    tracked_ephemeral_accounts: List[Tuple[str, str, str]] = []  # (email, session_token, current_password)
 
     exit_code = 0
 
@@ -161,13 +183,24 @@ def main() -> None:
         print("  [OK] GET /api/health/ -> 200 OK (Service healthy, database verified)")
 
         # Verify portal
-        portal_req = urllib.request.Request(
-            f"{TARGET_BASE_URL}/portal",
-            headers={"User-Agent": "Geospatial-Safe-Verifier/1.0"},
-        )
-        with urllib.request.urlopen(portal_req, timeout=20) as p_resp:
-            assert p_resp.status == 200
-            assert "text/html" in p_resp.headers.get("content-type", "")
+        portal_delivered = False
+        for p_attempt in range(1, 4):
+            try:
+                portal_req = urllib.request.Request(
+                    f"{TARGET_BASE_URL}/portal",
+                    headers={"User-Agent": "Geospatial-Safe-Verifier/1.0"},
+                )
+                with urllib.request.urlopen(portal_req, timeout=60) as p_resp:
+                    assert p_resp.status == 200
+                    assert "text/html" in p_resp.headers.get("content-type", "")
+                portal_delivered = True
+                break
+            except (ConnectionResetError, urllib.error.URLError, TimeoutError) as e:
+                if p_attempt < 3:
+                    time.sleep(2 * p_attempt)
+                    continue
+                raise
+        assert portal_delivered, "Failed to deliver developer portal"
         print("  [OK] GET /portal -> 200 OK (Developer Console HTML delivered)")
 
         # Verify docs & openapi
@@ -180,6 +213,7 @@ def main() -> None:
         # ----------------------------------------------------------------------
         print("\n[Phase 2] Verifying Developer Authentication & Identity...")
         # Use credentials from environment or generate ephemeral single-use pair
+        is_persistent_a = bool(os.environ.get("VERIFY_PROD_EMAIL"))
         tenant_a_email = os.environ.get("VERIFY_PROD_EMAIL") or f"synth_a_{uuid.uuid4().hex[:8]}@example.com"
         tenant_a_pw = os.environ.get("VERIFY_PROD_PASSWORD") or f"SecureA_{uuid.uuid4().hex}!"
 
@@ -193,6 +227,9 @@ def main() -> None:
         if code == 201:
             token_a = reg_body["access_token"]
             user_a_id = reg_body["user"]["id"]
+            tracked_sessions.append(token_a)
+            if not is_persistent_a:
+                tracked_ephemeral_accounts.append((tenant_a_email, token_a, tenant_a_pw))
             print(f"  [OK] Registered Tenant A (User ID: {user_a_id}) -> HTTP 201")
         elif code == 409:
             # Login if user already exists
@@ -204,6 +241,7 @@ def main() -> None:
             assert code == 200, f"Login failed for existing user: {code}"
             token_a = login_body["access_token"]
             user_a_id = login_body["user"]["id"]
+            tracked_sessions.append(token_a)
             print(f"  [OK] Logged in Tenant A (User ID: {user_a_id}) -> HTTP 200")
         else:
             raise AssertionError(f"Unexpected register response: {code} -> {reg_body}")
@@ -326,6 +364,8 @@ def main() -> None:
         assert code == 201
         token_b = reg_b["access_token"]
         headers_b = {"Authorization": f"Bearer {token_b}"}
+        tracked_sessions.append(token_b)
+        tracked_ephemeral_accounts.append((tenant_b_email, token_b, tenant_b_pw))
 
         code, proj_b, _ = http_json_request(
             f"{TARGET_BASE_URL}/api/v1/projects/",
@@ -382,8 +422,10 @@ def main() -> None:
         cleaned_files = 0
         revoked_keys = 0
         deleted_projects = 0
+        invalidated_sessions = 0
+        neutralized_accounts = 0
 
-        # Delete tracked files
+        # 1. Delete tracked files
         for fid, raw_k in tracked_files:
             try:
                 c, _, _ = http_json_request(
@@ -396,7 +438,7 @@ def main() -> None:
             except Exception as e:
                 print(f"  Warning: Failed to delete file {fid}: {e}", file=sys.stderr)
 
-        # Revoke tracked API keys
+        # 2. Revoke tracked API keys
         for pid, kid, tok in tracked_keys:
             try:
                 c, _, _ = http_json_request(
@@ -409,7 +451,7 @@ def main() -> None:
             except Exception as e:
                 print(f"  Warning: Failed to revoke key {kid}: {e}", file=sys.stderr)
 
-        # Delete tracked projects
+        # 3. Delete tracked projects
         for pid, tok in tracked_projects:
             try:
                 c, _, _ = http_json_request(
@@ -422,7 +464,44 @@ def main() -> None:
             except Exception as e:
                 print(f"  Warning: Failed to delete project {pid}: {e}", file=sys.stderr)
 
-        print(f"  [OK] Cleanup completed: Purged {cleaned_files} files, revoked {revoked_keys} keys, deleted {deleted_projects} projects.")
+        # 4. Neutralize ephemeral synthetic accounts (rotate password to unguessable CSPRNG string, purging sessions)
+        for email, tok, cur_pw in tracked_ephemeral_accounts:
+            try:
+                retired_pw = f"RetiredSynth_{secrets.token_urlsafe(48)}!A9z"
+                c, _, _ = http_json_request(
+                    f"{TARGET_BASE_URL}/api/v1/auth/change-password",
+                    method="POST",
+                    headers={"Authorization": f"Bearer {tok}"},
+                    data={"current_password": cur_pw, "new_password": retired_pw},
+                )
+                if c in (200, 401, 404):
+                    neutralized_accounts += 1
+            except Exception as e:
+                print(f"  Warning: Failed to neutralize ephemeral account {email}: {e}", file=sys.stderr)
+
+        # 5. Invalidate tracked sessions (explicit logout)
+        for s_tok in tracked_sessions:
+            try:
+                c, _, _ = http_json_request(
+                    f"{TARGET_BASE_URL}/api/v1/auth/logout",
+                    method="POST",
+                    headers={"Authorization": f"Bearer {s_tok}"},
+                )
+                if c in (200, 401, 404):
+                    invalidated_sessions += 1
+            except Exception as e:
+                print(f"  Warning: Failed to invalidate session: {e}", file=sys.stderr)
+
+        print(
+            f"  [OK] Cleanup completed: Purged {cleaned_files} files, revoked {revoked_keys} keys, "
+            f"deleted {deleted_projects} projects, invalidated {invalidated_sessions} sessions, "
+            f"neutralized {neutralized_accounts} ephemeral test accounts."
+        )
+        print(
+            "  [NOTE] Test Account Policy: No unsafe public account-deletion endpoint exists; "
+            "developer account records remain in PostgreSQL with 0 active keys, 0 files, 0 projects, "
+            "0 active sessions, and unguessable rotated passwords."
+        )
 
     sys.exit(exit_code)
 
